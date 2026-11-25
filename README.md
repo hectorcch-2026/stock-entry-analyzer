@@ -259,6 +259,62 @@ cp config.example.json config.json   # 再填入 botToken / chatId
 
 未設定時為**模擬模式**：完整產生訊息並在頁面預覽，但不實際發送，方便先驗證流程。
 
+### 6. 進階技術分析四模組
+
+在原有分析之外，`advancedTools` 附加四個模組。**每個模組都固定呈現四段**：
+觀察維度 → 最佳進場（下注）信號 → 止損／失效信號 → 常見支援平台。
+信號本身帶 `status`（`triggered` / `near` / `not-met` / `invalid` / `unknown`），
+前端據此上色並把已觸發者排前，避免使用者在一堆文字裡自己找重點。
+
+| 模組 | 觀察維度 | 進場信號 | 止損／失效信號 | 支援平台 |
+|---|---|---|---|---|
+| **VRVP / FRVP** 成交量分佈 | 籌碼堆積與重貨區 | 突破 VAH 後回踩確認、回調至 POC 止跌 | 放量跌破 POC 且無法快速收回、跌破 VAL | TradingView、富途牛牛 |
+| **Anchored VWAP** 錨定均價 | 特定事件後的資金平均成本 | 回踩重大利好／底部起漲日的 AVWAP 且出現看漲 K 線、多錨點共振 | 收盤明確跌破關鍵 AVWAP | TradingView、Thinkorswim |
+| **價格裂口 / FVG** | 短期買賣動能失衡區 | 回調進入 FVG、突破裂口上沿時縮量止跌 | 裂口被完全回補（封閉） | 所有主流看盤軟件 |
+| **期權 OI / GEX** | 機構與做市商對沖博弈 | 跌至 Put Wall 且處於正 Gamma | 跌破 Zero Gamma 且 Put Wall 大量平倉 | Unusual Whales、SpotGamma、富途期權異動 |
+
+實作分兩層，計算與解讀分離：
+
+- `lib/advtools.js`：純計算，零依賴、可重現。成交量分佈採「把每根 K 線量能依高低價
+  攤分到各價位格」，Value Area 從 POC 往量大的鄰格擴張至 70%。FVG 用三根 K 線的
+  失衡判定（看漲 `c1.h < c3.l`、看跌 `c1.l > c3.h`），並向前計算回補率。
+- `lib/advtools-interpret.js`：把計算結果翻成上述四段結構與狀態文字。
+
+#### ⚠️ 期權資料的現實限制（本模組的設計依據）
+
+實測 Yahoo 期權鏈端點（AAPL / NVDA / TSLA，各 93～186 個合約）：
+**`openInterest` 一律回傳 0**，`volume` 與部分 `impliedVolatility` 才是真實值；
+港股（如 `0700.HK`）完全沒有期權鏈。
+
+真正的 GEX = `Gamma × OI × 合約乘數 × 現價² × 0.01`，缺了 OI 就算不出來。
+因此採**雙軌且誠實標示**的做法：
+
+- 有 OI → 計算真正的 GEX、Put Wall / Call Wall / Zero Gamma。
+- 無 OI → 改用 `volume` 作活躍度權重計算 **VGEX 代理指標**，回傳 `proxy: true`
+  與 `proxyReason`，前端在卡片頂端顯示黃色警示，明確說明「這不是真實 GEX」。
+- 無期權鏈（港股）→ `available: false`，附上原因與替代平台。
+- 取用失敗（限流／連線）→ `available: false` 且 `transient: true`，
+  訊息與「本來就沒有期權」明確區隔，並提示稍後重整即可。
+
+> 為何要分得這麼細：把「查不到」和「這檔沒有」講成同一句話，會讓美股使用者
+> 誤以為 AAPL 沒有期權鏈。寧可多一個 `transient` 欄位，也不要給出誤導的結論。
+
+`GET /api/analyze` 的回應因此多一個 `advancedTools` 欄位：
+
+```json
+{
+  "advancedTools": {
+    "modules": [ /* 四個模組，結構固定 */ ],
+    "availableCount": 4,
+    "totalCount": 4,
+    "generatedAt": 1795592000000
+  }
+}
+```
+
+**既有欄位完全不動**（`score` / `buyZone` / `backtest` / `levels` / `series` …），
+四個模組各自獨立 try，任一失敗只讓該卡片顯示不可用，不影響主分析與 Telegram 通知。
+
 ---
 
 ## 資料來源與更新機制
@@ -461,7 +517,7 @@ curl -X POST http://localhost:5177/api/notify \
 | GET | `/api/health` | 健康檢查（含 Telegram 設定狀態） |
 | GET | `/api/config` | 取得通知設定狀態與評分權重 |
 | GET | `/api/search?q=` | 代碼 / 名稱搜尋（自動完成用） |
-| GET | `/api/analyze?symbol=` | 完整分析（買入區間、機率、回測、圖表資料） |
+| GET | `/api/analyze?symbol=` | 完整分析（買入區間、機率、回測、圖表資料、進階四模組） |
 | GET | `/api/news?symbol=&name=` | 相關新聞 |
 | POST | `/api/notify` | 發送 Telegram 通知 |
 | GET | `/api/diag*` | 來源連線診斷（見「來源診斷端點」） |
@@ -484,6 +540,7 @@ npm i -D playwright && npx playwright install chromium
 npm start                          # 另開一個終端
 npm run test:escape                # 通知訊息 HTML 轉義（15 項，純函式不需連網）
 npm run test:hidden                # hidden 屬性可見性（4 項，防離線橫條常駐）
+npm run test:adv                   # 進階分析四模組 UI 與資料完整性（25 項）
 npm run test:pwa                   # PWA：manifest、圖示、Service Worker、離線行為（33 項）
 npm run test:layout                # 三種螢幕尺寸版面與渲染驗證
 npm run test:flow                  # 自動完成、載入狀態、圖表切換
@@ -509,6 +566,7 @@ iPhone 獨立模式前端行為、PWA 安裝性（以 Chromium `Page.getInstalla
 |---|---|
 | `test:escape` | 15 / 15 |
 | `test:hidden` | 4 / 4 |
+| `test:adv` | 25 / 25 |
 | `test:pwa` | 33 / 33 |
 | `test:ios` | 34 / 34 |
 | `test:deployed` | **28 / 28** |

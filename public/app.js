@@ -573,6 +573,9 @@
     // --- 回測 ---
     renderBacktest(d);
 
+    // --- 進階技術分析四模組 ---
+    renderAdvanced(d);
+
     // --- 頁腳 ---
     var upDate = new Date(d.dataUpdatedAt);
     $('fUpdated').textContent = upDate.toLocaleString('zh-TW', { hour12: false })
@@ -737,6 +740,185 @@
         + '<td class="num ' + (x.r20 > 0 ? 'v-pos' : x.r20 < 0 ? 'v-neg' : '') + '">' + (x.r20 != null ? pct(x.r20, 2) : '—') + '</td>'
         + '</tr>';
     }).join('');
+  }
+
+  /* ============================================================
+     進階技術分析四模組
+     ------------------------------------------------------------
+     後端已把每個模組整理成固定結構，前端只負責呈現：
+       { key, title, subtitle, available, dimension{title,points[]},
+         entry[], stop[], platforms[{name,note}], data }
+     每個 entry / stop 都帶 status 與 statusText，用顏色與排序
+     讓使用者一眼看出哪個信號已觸發。
+     ============================================================ */
+
+  var ADV_STATUS = {
+    triggered: { text: '已觸發', cls: 'adv-on' },
+    near: { text: '接近', cls: 'adv-near' },
+    'not-met': { text: '未達', cls: 'adv-off' },
+    invalid: { text: '已失效', cls: 'adv-bad' },
+    unknown: { text: '無法判定', cls: 'adv-na' },
+  };
+
+  function renderAdvanced(d) {
+    var box = $('advModules');
+    var at = d.advancedTools;
+    if (!at || !at.modules || !at.modules.length) {
+      box.innerHTML = '<p class="adv-empty">此標的暫無進階分析資料。</p>';
+      $('advBadge').textContent = '—';
+      return;
+    }
+
+    $('advBadge').textContent = at.availableCount + ' / ' + at.totalCount + ' 模組可用';
+
+    box.innerHTML = at.modules.map(function (mod) {
+      return renderAdvModule(mod);
+    }).join('');
+  }
+
+  function renderAdvModule(mod) {
+    var head = '<header class="adv-mhead">'
+      + '<div class="adv-mtitle">'
+      + '<h3>' + esc(mod.title) + '</h3>'
+      + '<span class="adv-msub">' + esc(mod.subtitle) + '</span>'
+      + '</div>'
+      + (mod.available
+        ? ''
+        : '<span class="adv-flag adv-flag-na">資料不可用</span>')
+      + '</header>';
+
+    // 資料缺失：明確提示原因與替代方案，不顯示空殼
+    if (!mod.available) {
+      var flag = mod.transient
+        ? '<span class="adv-flag adv-flag-warn">暫時無法取得</span>'
+        : '<span class="adv-flag adv-flag-na">資料不可用</span>';
+      return '<article class="adv-mod adv-mod-na" data-key="' + esc(mod.key) + '">'
+        + '<header class="adv-mhead">'
+        + '<div class="adv-mtitle">'
+        + '<h3>' + esc(mod.title) + '</h3>'
+        + '<span class="adv-msub">' + esc(mod.subtitle) + '</span>'
+        + '</div>' + flag
+        + '</header>'
+        + '<div class="adv-na-box">'
+        + '<p class="adv-na-reason' + (mod.transient ? ' adv-na-transient' : '') + '">'
+        + esc(mod.reason || '此模組目前無法計算。') + '</p>'
+        + (mod.hint ? '<p class="adv-na-hint">' + esc(mod.hint) + '</p>' : '')
+        + renderAdvDimension(mod.dimension)
+        + renderAdvPlatforms(mod.platforms)
+        + '</div>'
+        + '</article>';
+    }
+
+    var proxyWarn = mod.proxy
+      ? '<div class="adv-proxy">⚠️ 代理指標：' + esc(mod.proxyReason || '此數值非真實 GEX。') + '</div>'
+      : '';
+
+    return '<article class="adv-mod" data-key="' + esc(mod.key) + '">'
+      + head
+      + proxyWarn
+      + renderAdvDataStrip(mod)
+      + renderAdvDimension(mod.dimension)
+      + renderAdvSignals('最佳進場（下注）信號', 'entry', mod.entry)
+      + renderAdvSignals('止損 / 失效信號', 'stop', mod.stop)
+      + renderAdvPlatforms(mod.platforms)
+      + '</article>';
+  }
+
+  /** 各模組的關鍵數字摘要（有 data 才顯示） */
+  function renderAdvDataStrip(mod) {
+    var dt = mod.data || {};
+    var items = [];
+
+    if (mod.key === 'vrvp') {
+      items.push(['POC', fmt(dt.poc)]);
+      items.push(['VAH', fmt(dt.vah)]);
+      items.push(['VAL', fmt(dt.val)]);
+      items.push(['重貨區', (dt.heavyZones || []).length + ' 個']);
+    } else if (mod.key === 'avwap') {
+      var prim = null;
+      (dt.series || []).forEach(function (s) { if (s.isPrimary) prim = s; });
+      if (!prim && (dt.series || []).length) prim = dt.series[0];
+      if (prim) {
+        items.push(['主錨點', (prim.anchor && prim.anchor.label) || '—']);
+        items.push(['AVWAP', fmt(prim.vwap)]);
+        items.push(['距離', pct(prim.distPct)]);
+        items.push(['事件後', pct(prim.gainSince)]);
+      }
+    } else if (mod.key === 'fvg') {
+      items.push(['未回補', dt.activeCount == null ? '—' : dt.activeCount + ' 個']);
+      items.push(['已回補', dt.filledCount == null ? '—' : dt.filledCount + ' 個']);
+      if (dt.nearest) {
+        items.push(['最近缺口', fmt(dt.nearest.lower) + ' – ' + fmt(dt.nearest.upper)]);
+        items.push(['回補率', Math.round((dt.nearest.fillRatio || 0) * 100) + '%']);
+      } else {
+        items.push(['最近缺口', '無']);
+        items.push(['回補率', '—']);
+      }
+    } else if (mod.key === 'gex') {
+      items.push(['Put Wall', fmt(dt.putWall)]);
+      items.push(['Call Wall', fmt(dt.callWall)]);
+      items.push(['Zero Gamma', dt.zeroGamma == null ? '—' : fmt(dt.zeroGamma)]);
+      items.push(['P/C 比', dt.pcr == null ? '—' : dt.pcr.toFixed(2)]);
+    }
+
+    if (!items.length) return '';
+
+    return '<div class="adv-strip">' + items.map(function (it) {
+      return '<div class="adv-strip-item"><span class="adv-sk">' + esc(it[0]) + '</span>'
+        + '<span class="adv-sv">' + esc(it[1]) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function renderAdvDimension(dim) {
+    if (!dim || !dim.points || !dim.points.length) return '';
+    return '<div class="adv-block">'
+      + '<h4 class="adv-bh">觀察維度</h4>'
+      + '<p class="adv-bsub">' + esc(dim.title || '') + '</p>'
+      + '<ul class="adv-points">' + dim.points.map(function (p) {
+        return '<li>' + esc(p) + '</li>';
+      }).join('') + '</ul>'
+      + '</div>';
+  }
+
+  function renderAdvSignals(title, kind, list) {
+    if (!list || !list.length) {
+      return '<div class="adv-block">'
+        + '<h4 class="adv-bh ' + (kind === 'entry' ? 'bh-entry' : 'bh-stop') + '">' + esc(title) + '</h4>'
+        + '<p class="adv-none">此模組目前無可用信號。</p>'
+        + '</div>';
+    }
+
+    // 已觸發 / 接近 的排前面，方便快速掃讀
+    var order = { triggered: 0, near: 1, unknown: 2, 'not-met': 3, invalid: 4 };
+    var sorted = list.slice().sort(function (a, b) {
+      return (order[a.status] == null ? 9 : order[a.status]) - (order[b.status] == null ? 9 : order[b.status]);
+    });
+
+    return '<div class="adv-block">'
+      + '<h4 class="adv-bh ' + (kind === 'entry' ? 'bh-entry' : 'bh-stop') + '">' + esc(title) + '</h4>'
+      + '<div class="adv-sigs">' + sorted.map(function (s) {
+        var st = ADV_STATUS[s.status] || ADV_STATUS.unknown;
+        return '<div class="adv-sig ' + st.cls + '">'
+          + '<div class="adv-sig-top">'
+          + '<span class="adv-sig-label">' + esc(s.label) + '</span>'
+          + '<span class="adv-pill ' + st.cls + '">' + st.text + '</span>'
+          + '</div>'
+          + (s.statusText ? '<p class="adv-sig-state">' + esc(s.statusText) + '</p>' : '')
+          + (s.detail ? '<p class="adv-sig-detail">' + esc(s.detail) + '</p>' : '')
+          + '</div>';
+      }).join('') + '</div>'
+      + '</div>';
+  }
+
+  function renderAdvPlatforms(plats) {
+    if (!plats || !plats.length) return '';
+    return '<div class="adv-block adv-block-plat">'
+      + '<h4 class="adv-bh">常見支援平台</h4>'
+      + '<div class="adv-plats">' + plats.map(function (p) {
+        return '<span class="adv-plat" title="' + esc(p.note || '') + '">'
+          + esc(p.name) + '</span>';
+      }).join('') + '</div>'
+      + '</div>';
   }
 
   function timeAgo(ts) {

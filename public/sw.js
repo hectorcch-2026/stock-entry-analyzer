@@ -20,8 +20,10 @@
 // 版本號一變，下列三個快取名也跟著變，activate 時舊快取會被清掉。
 // v1.0.1：styles.css 加入 :where([hidden]){display:none}，
 //         修復離線橫條等 10 個元素 hidden 失效而常駐顯示的問題。
-//         必須升版，否則舊用戶的 Stale-While-Revalidate 會先回舊 CSS。
-const VERSION = 'v1.0.1';
+// v1.0.2：新增進階技術分析四模組（VRVP / AVWAP / FVG / GEX），
+//         index.html、app.js、styles.css 三者皆變動，必須升版
+//         否則舊用戶的 Stale-While-Revalidate 會先回舊檔案。
+const VERSION = 'v1.0.2';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
