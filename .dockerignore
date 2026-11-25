@@ -1,0 +1,16 @@
+# 建置產物與依賴
+node_modules/
+npm-debug.log*
+
+# 機密設定（Telegram token 等）——務必不要提交
+config.json
+.env
+.env.*
+
+# 測試輸出
+tests/out-*.png
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+*.log

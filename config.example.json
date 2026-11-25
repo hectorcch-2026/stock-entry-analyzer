@@ -1,0 +1,7 @@
+{
+  "_comment": "複製此檔為 config.json 並填入實際值即可啟用 Telegram 通知。未填寫時系統以模擬模式運作。",
+  "telegram": {
+    "botToken": "",
+    "chatId": ""
+  }
+}

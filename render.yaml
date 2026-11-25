@@ -1,0 +1,23 @@
+# Render Blueprint —— 一鍵部署（Infrastructure as Code）
+# 用法：把專案推到 GitHub → Render Dashboard → New → Blueprint → 選此 repo
+# 文檔：https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: stock-entry-analyzer
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # 以下兩項 sync:false —— Render 會在首次部署時要求你手動填寫，
+      # 不會被寫進 repo（等同 config.json 的作用）。
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false

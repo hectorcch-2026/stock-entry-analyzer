@@ -1,0 +1,535 @@
+'use strict';
+
+/**
+ * 股票買入位與技術位分析 — 後端服務
+ *
+ * 路由：
+ *   GET  /api/health                 健康檢查
+ *   GET  /api/search?q=              代碼 / 名稱搜尋（自動完成）
+ *   GET  /api/analyze?symbol=        完整分析（含買入區間、機率、回測）
+ *   GET  /api/news?symbol=           相關新聞
+ *   POST /api/notify                 發送 Telegram 通知
+ *   GET  /api/config                 通知設定狀態
+ *
+ * 零外部依賴，使用 Node 內建 http / fs。
+ */
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const url = require('url');
+
+const yahoo = require('./lib/datasource');
+const analyzer = require('./lib/analyzer');
+const telegram = require('./lib/telegram');
+
+const PORT = process.env.PORT || 5177;
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.png': 'image/png',
+  '.webmanifest': 'application/manifest+json',
+};
+
+function sendJSON(res, status, data, extraHeaders) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, Object.assign({
+    'Content-Type': 'application/json; charset=utf-8',
+    // API 一律不快取：由 Service Worker 決定離線回退策略，
+    // 避免瀏覽器 HTTP 快取與 SW 快取互相干擾造成資料不一致。
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  }, extraHeaders || {}));
+  res.end(body);
+}
+
+function sendError(res, status, code, message, hint) {
+  sendJSON(res, status, { ok: false, error: { code, message, hint: hint || null } });
+}
+
+/**
+ * 港股代碼補零：Yahoo 使用 4 位（0005.HK、0700.HK）或 5 位（09988→9988）。
+ * 先去除前導零，再依 Yahoo 實際格式補齊：<=4 位補到 4 位，>4 位補到 5 位。
+ */
+function padHK(digits) {
+  const d = String(digits).replace(/^0+/, '') || '0';
+  return d.length <= 4 ? d.padStart(4, '0') : d.padStart(5, '0');
+}
+
+/**
+ * 輸入驗證與正規化
+ * 支援：
+ *   - 美股：AAPL、BRK.B、MSFT
+ *   - 港股：0700.HK、0700、700、00700（1-5 位數字一律視為港股，自動校正補零）
+ *   - ETF：SPY、2800.HK
+ */
+function normalizeSymbol(raw) {
+  if (!raw) return { ok: false, code: 'EMPTY', message: '請輸入股票代碼或名稱' };
+  let s = String(raw).trim();
+
+  if (s.length > 24) {
+    return { ok: false, code: 'TOO_LONG', message: '輸入長度超出限制（最多 24 個字元）' };
+  }
+  // 中文名稱走搜尋流程，不需正規化為代碼
+  if (/[\u4e00-\u9fff]/.test(s)) return { ok: true, value: s, isName: true };
+
+  s = s.toUpperCase().replace(/\s+/g, '');
+
+  // 已是完整港股代碼：去除前導零後補足 4 位（Yahoo 港股格式為 4-5 位）
+  if (/^\d{3,5}\.HK$/.test(s)) {
+    return { ok: true, value: padHK(s.replace(/\.HK$/, '')) + '.HK', isName: false, market: 'HK' };
+  }
+  // 純數字：1-5 位一律視為港股（含 00700 這類多補零的寫法）
+  if (/^\d{1,5}$/.test(s)) {
+    return { ok: true, value: padHK(s) + '.HK', isName: false, market: 'HK' };
+  }
+  if (/^[A-Z0-9]{1,6}(\.[A-Z]{1,3})?$/.test(s)) {
+    return { ok: true, value: s, isName: false, market: 'US' };
+  }
+  if (/^[A-Z.\-]{1,10}$/.test(s)) return { ok: true, value: s, isName: false, market: 'US' };
+
+  return { ok: false, code: 'INVALID_FORMAT', message: `「${raw}」格式無法辨識`, hint: '美股請輸入如 AAPL，港股請輸入如 0700 或 0700.HK' };
+}
+
+/** 解析查詢：若為名稱或模糊輸入，先搜尋再取最相符代碼 */
+async function resolveSymbol(input) {
+  const norm = normalizeSymbol(input);
+  if (!norm.ok) {
+    const err = new Error(norm.message);
+    err.code = norm.code;
+    err.hint = norm.hint;
+    err.badInput = true;
+    throw err;
+  }
+
+  if (!norm.isName) {
+    // 數字輸入已明確判定為港股，直接用 .HK 代碼，
+    // 不再退回搜尋（上游會把 00700 誤判為台灣股票 00700.TW）
+    try {
+      await yahoo.quote(norm.value);
+      return { symbol: norm.value, assumed: norm.market === 'HK' ? 'HK' : null };
+    } catch (e) {
+      // 上游限流 / 連線異常時不可謊報「查無此代碼」，否則使用者會誤以為代碼錯誤
+      if (e && (e.status === 429 || (e.status >= 500 && e.status < 600))) throw e;
+      if (norm.market === 'HK') {
+        const err = new Error(`查無港股代碼「${input}」`);
+        err.code = 'NOT_FOUND';
+        err.hint = '請確認代碼是否正確（港股為 1-5 位數字，如 0700、9988），或改用公司名稱搜尋';
+        throw err;
+      }
+    }
+    // 美股：嘗試搜尋校正
+    try {
+      const list = await yahoo.search(norm.value);
+      const exact = list.find((x) => x.symbol.toUpperCase() === norm.value.toUpperCase());
+      if (exact) return { symbol: exact.symbol, assumed: null };
+      if (list.length) {
+        return { symbol: list[0].symbol, assumed: null, fuzzy: true, candidates: list.slice(0, 5) };
+      }
+    } catch { /* 落至下方統一錯誤 */ }
+    const err = new Error(`查無代碼「${input}」對應的股票`);
+    err.code = 'NOT_FOUND';
+    err.hint = '請確認代碼是否正確，或改用股票名稱搜尋';
+    throw err;
+  }
+
+  const list = await yahoo.search(norm.value);
+  if (!list.length) {
+    const err = new Error(`查無「${input}」相關的股票`);
+    err.code = 'NOT_FOUND';
+    err.hint = '請嘗試其他關鍵字，或直接輸入股票代碼（美股 AAPL、港股 0700）';
+    throw err;
+  }
+  // 名稱完全相符優先
+  const exact = list.find((x) => x.name.toLowerCase() === norm.value.toLowerCase() || x.shortName.toLowerCase() === norm.value.toLowerCase());
+  return { symbol: (exact || list[0]).symbol, assumed: null, fuzzy: !exact, candidates: list.slice(0, 5) };
+}
+
+/** 靜態檔案服務 */
+function serveStatic(req, res, pathname) {
+  let rel = pathname === '/' ? '/index.html' : pathname;
+  // 防止路徑穿越
+  const safe = path.normalize(rel).replace(/^([.][.][/\\])+/, '');
+  const file = path.join(PUBLIC_DIR, safe);
+  if (!file.startsWith(PUBLIC_DIR)) return sendError(res, 403, 'FORBIDDEN', '拒絕存取');
+
+  fs.readFile(file, (err, buf) => {
+    if (err) {
+      // SPA 回退
+      return fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, html) => {
+        if (e2) return sendError(res, 404, 'NOT_FOUND', '頁面不存在');
+        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
+        res.end(html);
+      });
+    }
+    const ext = path.extname(file).toLowerCase();
+    const base = path.basename(file);
+    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+
+    // Service Worker 必須「不快取（或極短快取）」，否則更新永遠不會生效。
+    // 瀏覽器對 sw.js 預設有 24 小時快取上限，需明確覆寫。
+    if (base === 'sw.js') {
+      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      headers['Service-Worker-Allowed'] = '/';
+    } else if (base === 'manifest.webmanifest') {
+      headers['Cache-Control'] = 'no-cache';
+    } else if (ext === '.html') {
+      // HTML 不快取，確保使用者拿到最新的 PWA meta 與資源版本
+      headers['Cache-Control'] = 'no-cache';
+    } else {
+      // 其他靜態資源交由 Service Worker 管理快取，此處給合理長度
+      headers['Cache-Control'] = 'public, max-age=3600';
+    }
+
+    res.writeHead(200, headers);
+    res.end(buf);
+  });
+}
+
+async function readBody(req, limit = 1e6) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > limit) { reject(new Error('請求內容過大')); req.destroy(); }
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = decodeURIComponent(parsed.pathname);
+  const q = parsed.query;
+
+  // CORS（方便 Power BI / 外部呼叫）
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+
+  try {
+    if (pathname === '/api/health') {
+      return sendJSON(res, 200, { ok: true, service: 'stock-entry-analyzer', time: Date.now(), telegram: telegram.isConfigured() });
+    }
+
+    if (pathname === '/api/config') {
+      return sendJSON(res, 200, { ok: true, telegramConfigured: telegram.isConfigured(), weights: analyzer.WEIGHTS });
+    }
+
+    // 資料來源連線診斷：部署環境若封鎖對外網路，可由此確認
+    if (pathname === '/api/diag') {
+      const targets = [
+        ['yahoo', 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5d&interval=1d'],
+        ['yahoo2', 'https://query2.finance.yahoo.com/v8/finance/chart/AAPL?range=5d&interval=1d'],
+        ['eastmoney', 'https://push2.eastmoney.com/api/qt/stock/get?secid=105.AAPL&fields=f43,f57'],
+        ['em-his', 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=105.AAPL&fields1=f1&fields2=f51,f53&klt=101&lmt=2&end=20500101'],
+        ['sina', 'https://hq.sinajs.cn/list=gb_aapl'],
+        ['tencent', 'https://qt.gtimg.cn/q=usAAPL'],
+        ['tc-kline-web', 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=usAAPL.OQ,day,,,5,qfq'],
+        ['tc-kline', 'https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=usAAPL.OQ,day,,,5,qfq'],
+        ['tc-kline-px', 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get?param=usAAPL.OQ,day,,,5,qfq'],
+        ['tc-search', 'https://smartbox.gtimg.cn/s3/?v=2&q=AAPL&t=all'],
+        ['stooq', 'https://stooq.com/q/d/l/?s=aapl.us&i=d'],
+        ['telegram', 'https://api.telegram.org/'],
+        ['cloudflare', 'https://1.1.1.1/cdn-cgi/trace'],
+        ['example', 'https://example.com/'],
+      ];
+      const out = {};
+      await Promise.all(targets.map(async ([name, url]) => {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://finance.yahoo.com/' },
+            signal: AbortSignal.timeout(8000),
+          });
+          const body = await r.text().catch(() => '');
+          out[name] = { ok: r.ok, status: r.status, ms: Date.now() - t0, len: body.length, head: body.slice(0, 60).replace(/\s+/g, ' ') };
+        } catch (e) {
+          out[name] = { ok: false, error: (e.cause?.code || e.name || e.message || '').toString().slice(0, 60), ms: Date.now() - t0 };
+        }
+      }));
+      return sendJSON(res, 200, { ok: true, env: { node: process.version, dataSource: process.env.DATA_SOURCE || 'auto' }, targets: out });
+    }
+
+    // 來源內部路徑診斷：針對指定代碼追蹤各來源的解析與取資料過程
+    if (pathname === '/api/diag/source') {
+      const sym = (q.symbol || 'AAPL').trim();
+      const trace = {};
+      try {
+        const tc = require('./lib/tencent');
+        const t0 = Date.now();
+        const resolved = await tc.resolveCode(sym);
+        trace.tencentResolve = {
+          ms: Date.now() - t0,
+          qq: resolved.qq,
+          suffix: resolved.suffix,
+          price: resolved.quote?.price ?? null,
+          fullCode: resolved.quote?.fullCode ?? null,
+          name: resolved.quote?.name ?? null,
+        };
+      } catch (e) { trace.tencentResolve = { error: (e.message || String(e)).slice(0, 120) }; }
+      try {
+        const tc = require('./lib/tencent');
+        const t0 = Date.now();
+        const ch = await tc.chart(sym, '2y', '1d');
+        trace.tencentChart = { ms: Date.now() - t0, candles: ch.candles.length, last: ch.candles.slice(-1)[0]?.c ?? null, symbol: ch.meta.symbol };
+      } catch (e) { trace.tencentChart = { error: (e.message || String(e)).slice(0, 120), code: e.code }; }
+      try {
+        const tc = require('./lib/tencent');
+        const t0 = Date.now();
+        const qt = await tc.quote(sym);
+        trace.tencentQuote = { ms: Date.now() - t0, symbol: qt.symbol, price: qt.price, currency: qt.currency };
+      } catch (e) { trace.tencentQuote = { error: (e.message || String(e)).slice(0, 120), code: e.code }; }
+      try {
+        const em = require('./lib/eastmoney');
+        const t0 = Date.now();
+        const ch = await em.chart(sym, '2y', '1d');
+        trace.eastmoneyChart = { ms: Date.now() - t0, candles: ch.candles.length };
+      } catch (e) { trace.eastmoneyChart = { error: (e.message || String(e)).slice(0, 120), code: e.code }; }
+      try {
+        const yh = require('./lib/yahoo');
+        const t0 = Date.now();
+        const ch = await yh.chart(sym, '2y', '1d');
+        trace.yahooChart = { ms: Date.now() - t0, candles: ch.candles.length };
+      } catch (e) { trace.yahooChart = { error: (e.message || String(e)).slice(0, 120), code: e.code, status: e.status }; }
+      return sendJSON(res, 200, { ok: true, symbol: sym, trace });
+    }
+
+    // K 線主機 / 標頭矩陣診斷：釐清部署環境對 K 線子網域的放行條件
+    if (pathname === '/api/diag/kline') {
+      const code = (q.code || 'usAAPL.OQ').trim();
+      const hosts = [
+        'https://web.ifzq.gtimg.cn',
+        'https://ifzq.gtimg.cn',
+        'https://proxy.finance.qq.com/ifzqgtimg',
+      ];
+      const referers = [
+        ['gu', 'https://gu.qq.com/'],
+        ['yahoo', 'https://finance.yahoo.com/'],
+        ['none', null],
+      ];
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+      const out = {};
+      await Promise.all(hosts.flatMap((h) => referers.map(async ([rname, ref]) => {
+        const label = h.replace('https://', '') + '|' + rname;
+        const t0 = Date.now();
+        const headers = { 'User-Agent': ua };
+        if (ref) headers.Referer = ref;
+        const url = `${h}/appstock/app/fqkline/get?param=${encodeURIComponent(`${code},day,,,5,qfq`)}`;
+        try {
+          const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+          const buf = Buffer.from(await r.arrayBuffer());
+          const txt = new TextDecoder('gbk').decode(buf);
+          let rows = null, keys = null, parseErr = null;
+          try {
+            const j = JSON.parse(txt);
+            keys = Object.keys(j?.data || {});
+            const d = j?.data?.[code];
+            rows = (d?.day || d?.qfqday || []).length;
+          } catch (e) { parseErr = e.message.slice(0, 60); }
+          out[label] = { ok: r.ok, status: r.status, ms: Date.now() - t0, len: buf.length, keys, rows, parseErr, head: txt.slice(0, 90).replace(/\s+/g, ' ') };
+        } catch (e) {
+          out[label] = { ok: false, error: (e.cause?.code || e.name || e.message || '').toString().slice(0, 60), ms: Date.now() - t0 };
+        }
+      })));
+      return sendJSON(res, 200, { ok: true, code, results: out });
+    }
+
+    // URL 編碼變體診斷：釐清出口代理是否對 %2C（逗號）等編碼敏感
+    if (pathname === '/api/diag/url') {
+      const host = (q.host || 'https://ifzq.gtimg.cn').trim();
+      const codes = (q.codes || 'usAAPL.OQ,hk00700,usAAPL').split(',').map((s) => s.trim()).filter(Boolean);
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+      const out = [];
+      for (const code of codes) {
+        const raw = `${code},day,,,5,qfq`;
+        const variants = [
+          ['raw', raw],
+          ['enc', encodeURIComponent(raw)],
+          ['encCodeOnly', encodeURIComponent(code) + ',day,,,5,qfq'],
+        ];
+        for (const [label, param] of variants) {
+          const url = `${host}/appstock/app/fqkline/get?param=${param}`;
+          const t0 = Date.now();
+          try {
+            const r = await fetch(url, { headers: { 'User-Agent': ua, Referer: 'https://gu.qq.com/' }, signal: AbortSignal.timeout(8000) });
+            const buf = Buffer.from(await r.arrayBuffer());
+            const txt = new TextDecoder('gbk').decode(buf);
+            let rows = null;
+            try { const j = JSON.parse(txt); const d = j?.data?.[code]; rows = (d?.day || d?.qfqday || []).length; } catch { /* 非 JSON */ }
+            out.push({ code, label, status: r.status, ms: Date.now() - t0, len: buf.length, rows, head: txt.slice(0, 55).replace(/\s+/g, ' ') });
+          } catch (e) {
+            out.push({ code, label, error: (e.cause?.code || e.name || e.message || '').toString().slice(0, 50), ms: Date.now() - t0 });
+          }
+        }
+      }
+      return sendJSON(res, 200, { ok: true, host, results: out });
+    }
+
+    // 標頭矩陣診斷：比對 UA / Referer 對出口代理放行的影響
+    if (pathname === '/api/diag/hdr') {
+      const code = (q.code || 'usAAPL.OQ').trim();
+      const host = (q.host || 'https://ifzq.gtimg.cn').trim();
+      const url = `${host}/appstock/app/fqkline/get?param=${code},day,,,5,qfq`;
+      const variants = [
+        ['ua-short-yahoo', { 'User-Agent': 'Mozilla/5.0', Referer: 'https://finance.yahoo.com/' }],
+        ['ua-short-gu', { 'User-Agent': 'Mozilla/5.0', Referer: 'https://gu.qq.com/' }],
+        ['ua-short-none', { 'User-Agent': 'Mozilla/5.0' }],
+        ['ua-chrome-yahoo', { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', Referer: 'https://finance.yahoo.com/' }],
+        ['ua-chrome-gu', { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', Referer: 'https://gu.qq.com/' }],
+        ['ua-curltc', { 'User-Agent': 'curl/8.0' }],
+        ['no-headers', {}],
+      ];
+      const out = {};
+      for (const [label, headers] of variants) {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+          const buf = Buffer.from(await r.arrayBuffer());
+          const txt = new TextDecoder('gbk').decode(buf);
+          let rows = null;
+          try { const j = JSON.parse(txt); const d = j?.data?.[code]; rows = (d?.day || d?.qfqday || []).length; } catch { /* 非 JSON */ }
+          out[label] = { status: r.status, ms: Date.now() - t0, len: buf.length, rows, head: txt.slice(0, 50).replace(/\s+/g, ' ') };
+        } catch (e) {
+          out[label] = { error: (e.cause?.code || e.name || e.message || '').toString().slice(0, 50), ms: Date.now() - t0 };
+        }
+      }
+      return sendJSON(res, 200, { ok: true, code, host, results: out });
+    }
+
+    // 端點形狀探測：在多個候選 URL 中找出部署環境可用的 K 線端點
+    if (pathname === '/api/diag/probe') {
+      const code = (q.code || 'usAAPL.OQ').trim();
+      const cands = [
+        ['qt-kline', `https://qt.gtimg.cn/q=${code}`],
+        ['ifzq-fqkline', `https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,20,qfq`],
+        ['ifzq-kline', `https://ifzq.gtimg.cn/appstock/app/kline/kline?param=${code},day,,,20`],
+        ['ifzq-newfq', `https://ifzq.gtimg.cn/appstock/app/newfqkline/get?param=${code},day,,,20,qfq`],
+        ['web-fqkline', `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,20,qfq`],
+        ['web-kline', `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=${code},day,,,20`],
+        ['web-newfq', `https://web.ifzq.gtimg.cn/appstock/app/newfqkline/get?param=${code},day,,,20,qfq`],
+        ['px-fqkline', `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get?param=${code},day,,,20,qfq`],
+        ['px-newfq', `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=${code},day,,,20,qfq`],
+        ['px-min', `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/minute/query?code=${code}`],
+        ['ifzq-min', `https://ifzq.gtimg.cn/appstock/app/minute/query?code=${code}`],
+        ['qt-kline2', `https://qt.gtimg.cn/q=${code},day`],
+        ['sinajs', `https://hq.sinajs.cn/list=gb_aapl`],
+        ['em-push2', `https://push2.eastmoney.com/api/qt/stock/get?secid=105.AAPL&fields=f43,f57`],
+      ];
+      const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+      const out = {};
+      await Promise.all(cands.map(async ([label, url]) => {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(url, { headers: { 'User-Agent': ua, Referer: 'https://gu.qq.com/' }, signal: AbortSignal.timeout(8000) });
+          const buf = Buffer.from(await r.arrayBuffer());
+          // 嘗試以 UTF-8 與 GBK 解碼，看哪個能得到 JSON
+          const utf8 = buf.toString('utf8');
+          let gbk = ''; try { gbk = new TextDecoder('gbk').decode(buf); } catch { /* 忽略 */ }
+          const pick = utf8.trim().startsWith('{') ? utf8 : gbk;
+          let rows = null;
+          try { const j = JSON.parse(pick); const d = j?.data?.[code]; const k = d ? (d.day || d.qfqday || d.data) : null; rows = Array.isArray(k) ? k.length : null; } catch { /* 非 JSON */ }
+          out[label] = { status: r.status, ms: Date.now() - t0, len: buf.length, rows, head: pick.slice(0, 60).replace(/\s+/g, ' ') };
+        } catch (e) {
+          out[label] = { error: (e.cause?.code || e.name || e.message || '').toString().slice(0, 46), ms: Date.now() - t0 };
+        }
+      }));
+      return sendJSON(res, 200, { ok: true, code, results: out });
+    }
+
+    if (pathname === '/api/search') {
+      const query = (q.q || '').trim();
+      if (!query) return sendError(res, 400, 'EMPTY', '請輸入搜尋關鍵字', '可輸入代碼（AAPL / 0700）或名稱（騰訊 / Apple）');
+      if (query.length > 40) return sendError(res, 400, 'TOO_LONG', '搜尋關鍵字過長');
+      const results = await yahoo.search(query);
+      if (!results.length) {
+        return sendJSON(res, 200, { ok: true, count: 0, results: [], message: `查無「${query}」相關結果，請嘗試其他關鍵字` });
+      }
+      return sendJSON(res, 200, { ok: true, count: results.length, results });
+    }
+
+    if (pathname === '/api/analyze') {
+      const raw = (q.symbol || q.s || '').trim();
+      if (!raw) return sendError(res, 400, 'EMPTY', '請輸入股票代碼或名稱', '例如 AAPL、0700.HK、騰訊');
+      const resolved = await resolveSymbol(raw);
+      const data = await analyzer.analyze(resolved.symbol);
+      if (resolved.assumed) data.assumedMarket = resolved.assumed;
+      if (resolved.fuzzy) data.fuzzyMatchNote = '未找到完全相符的標的，已顯示最相近的結果，請確認是否正確。';
+      if (resolved.candidates) data.candidates = resolved.candidates;
+      data.ok = true;
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/news') {
+      const raw = (q.symbol || '').trim();
+      if (!raw) return sendError(res, 400, 'EMPTY', '請提供股票代碼');
+      const items = await yahoo.news(raw, 8, (q.name || '').trim() || null);
+      return sendJSON(res, 200, { ok: true, count: items.length, news: items });
+    }
+
+    if (pathname === '/api/notify' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      if (!body.symbol) return sendError(res, 400, 'EMPTY', '缺少 symbol 參數');
+
+      // 前端會帶完整載荷（價格、訊號、新聞），但外部系統 / curl 常只給 symbol。
+      // 缺價格時自動補一次分析，避免送出「現價：—」這種無資訊量的通知。
+      if (body.price == null || !body.name) {
+        try {
+          const d = await analyzer.analyze(body.symbol);
+          body.name = body.name || d.meta.name || body.symbol;
+          body.price = body.price ?? d.meta.price;
+          body.changePercent = body.changePercent ?? d.meta.changePercent;
+          body.currency = body.currency || d.meta.currency;
+          body.signals = body.signals || {
+            buyZone: d.buyZone, score: d.score,
+            verdictLabel: d.verdict?.label, probUp20: d.probabilities?.probUp20,
+          };
+          if (!Array.isArray(body.news)) {
+            body.news = await yahoo.news(d.meta.symbol, 3, d.meta.name).catch(() => []);
+          }
+        } catch (e) {
+          // 補資料失敗不阻擋通知：仍送出既有內容，並附上提示
+          body.__enrichError = e.message;
+        }
+      }
+
+      const result = await telegram.send(body);
+      if (body.__enrichError) result.warning = `自動補齊行情失敗：${body.__enrichError}`;
+      return sendJSON(res, result.ok ? 200 : 502, result);
+    }
+
+    if (pathname.startsWith('/api/')) {
+      return sendError(res, 404, 'UNKNOWN_ENDPOINT', `未知的 API 端點：${pathname}`);
+    }
+
+    return serveStatic(req, res, pathname);
+  } catch (e) {
+    // 統一錯誤處理
+    if (e.badInput) return sendError(res, 400, e.code || 'BAD_INPUT', e.message, e.hint);
+    if (e.insufficient) return sendError(res, 422, 'INSUFFICIENT_DATA', e.message, '此標的可能為新上市、成交量過低或資料缺漏，建議改用其他標的');
+    if (e.notFound || e.code === 'NOT_FOUND' || e.status === 404) {
+      return sendError(res, 404, 'NOT_FOUND', e.message || '查無此股票代碼', '請確認代碼格式：美股如 AAPL，港股如 0700.HK');
+    }
+    if (e.status === 429) return sendError(res, 429, 'RATE_LIMITED', '資料來源請求過於頻繁，請稍候再試');
+    console.error('[error]', pathname, e.message);
+    return sendError(res, 500, 'UPSTREAM_ERROR', '取得資料時發生問題，請稍後重試', e.message);
+  }
+});
+
+// 綁定 0.0.0.0 以便在容器 / 反向代理環境（如雲端沙箱）中接受外部連線
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n  股票買入位與技術位分析系統`);
+  console.log(`  服務已啟動： http://0.0.0.0:${PORT}`);
+  console.log(`  Telegram 通知： ${telegram.isConfigured() ? '已設定' : '未設定（模擬模式）'}`);
+  console.log(`  資料來源： Yahoo Finance\n`);
+});
+
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));

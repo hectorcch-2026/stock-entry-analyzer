@@ -1,0 +1,8 @@
+# 統一換行符，避免 Windows / Linux 之間互相改動整份檔案
+* text=auto eol=lf
+
+# 二進位檔案不做換行轉換
+*.png binary
+*.jpg binary
+*.ico binary
+*.webp binary

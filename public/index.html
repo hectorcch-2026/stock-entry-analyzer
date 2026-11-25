@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="美股與港股買入位與技術位分析：即時查詢、支撐壓力、均線、量價、歷史回測機率">
+<title>買入位與技術位分析系統 | 美股 · 港股</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#1d4ed8">
+<meta name="color-scheme" content="light">
+
+<!-- iOS：加入主畫面後的獨立視窗行為 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="買入位分析">
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- 離線 / 快取資料提示（連線恢復或缺資料時自動顯示） -->
+<div id="offlineBar" class="offline-bar" role="status" aria-live="polite" hidden>
+  <span class="ob-icon" aria-hidden="true">⚡</span>
+  <span id="offlineText">目前離線，介面可瀏覽但無法取得即時行情。</span>
+  <button type="button" id="offlineRetry" class="ob-retry">重試連線</button>
+</div>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark">📈</span>
+      <div class="brand-text">
+        <strong>買入位與技術位分析</strong>
+        <span>美股 · 港股</span>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">就緒</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- iOS 加入主畫面引導（僅 iOS Safari 未安裝時顯示） -->
+  <aside id="iosInstallTip" class="install-tip" hidden aria-label="加入主畫面提示">
+    <button type="button" class="it-close" id="iosTipClose" aria-label="關閉提示">✕</button>
+    <div class="it-body">
+      <span class="it-icon" aria-hidden="true">📲</span>
+      <div>
+        <strong>加入主畫面，像 App 一樣使用</strong>
+        <p>點下方工具的<strong>分享鈕</strong>（方框向上箭頭），選擇「<strong>加入主畫面</strong>」，
+           即可全螢幕開啟並在離線時仍能看到介面。</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 查詢區 ============ -->
+  <section class="search-card" aria-label="股票查詢">
+    <form id="searchForm" class="search-form" autocomplete="off" novalidate>
+      <div class="search-field">
+        <label class="sr-only" for="symbolInput">股票代碼或名稱</label>
+        <span class="search-icon" aria-hidden="true">🔍</span>
+        <input
+          id="symbolInput"
+          type="text"
+          inputmode="search"
+          placeholder="輸入股票代碼或名稱，例如 AAPL、0700.HK、騰訊、Apple"
+          aria-describedby="searchHint"
+          spellcheck="false"
+        >
+        <button type="button" id="clearBtn" class="clear-btn" aria-label="清除輸入" hidden>✕</button>
+        <ul id="suggestions" class="suggestions" role="listbox" aria-label="搜尋建議" hidden></ul>
+      </div>
+      <button type="submit" id="searchBtn" class="primary-btn">
+        <span class="btn-label">查詢分析</span>
+        <span class="spinner" hidden></span>
+      </button>
+    </form>
+
+    <div class="chips" role="group" aria-label="快速範例">
+      <span class="chips-label">快速範例</span>
+      <button class="chip" data-symbol="0700.HK">騰訊 0700.HK</button>
+      <button class="chip" data-symbol="9988.HK">阿里巴巴 9988.HK</button>
+      <button class="chip" data-symbol="AAPL">Apple AAPL</button>
+      <button class="chip" data-symbol="NVDA">NVIDIA NVDA</button>
+      <button class="chip" data-symbol="TSLA">Tesla TSLA</button>
+    </div>
+
+    <p id="searchHint" class="hint-line">
+      支援美股代碼（AAPL）、港股代碼（0700 或 0700.HK）與中英文名稱搜尋。
+    </p>
+  </section>
+
+  <!-- ============ 載入骨架 ============ -->
+  <section id="loading" class="loading-card" hidden aria-live="polite">
+    <div class="skeleton-line w40"></div>
+    <div class="skeleton-line w70"></div>
+    <div class="skeleton-grid">
+      <div class="skeleton-box"></div>
+      <div class="skeleton-box"></div>
+      <div class="skeleton-box"></div>
+    </div>
+    <p class="loading-text" id="loadingText">正在取得行情並計算技術位…</p>
+  </section>
+
+  <!-- ============ 錯誤提示 ============ -->
+  <section id="errorBox" class="error-card" hidden role="alert" aria-live="assertive">
+    <div class="error-head">
+      <span class="error-icon" aria-hidden="true">⚠️</span>
+      <strong id="errorTitle">查詢失敗</strong>
+    </div>
+    <p id="errorMessage" class="error-message"></p>
+    <p id="errorHint" class="error-hint"></p>
+    <div id="errorActions" class="error-actions"></div>
+  </section>
+
+  <!-- ============ 歡迎 / 空狀態 ============ -->
+  <section id="welcome" class="welcome-card">
+    <h2>即時判斷進場時機</h2>
+    <p>輸入美股或港股代碼，系統將計算支撐壓力位、各週期均線、量價關係與波動結構，
+       並以歷史數據回測推估該價位的進場勝率與獲利機率。</p>
+    <div class="feature-grid">
+      <div class="feature"><span class="fi">🎯</span><strong>建議買入區間</strong><p>結合支撐位、均線與斐波那契回撤，給出可執行價位帶與停損目標。</p></div>
+      <div class="feature"><span class="fi">📊</span><strong>關鍵技術位</strong><p>支撐、壓力、MA5/10/20/60/120、近期高低點一次呈現。</p></div>
+      <div class="feature"><span class="fi">🧠</span><strong>判斷依據解說</strong><p>逐項說明現價與技術位關係、量價變化如何影響買點。</p></div>
+      <div class="feature"><span class="fi">📐</span><strong>歷史機率模型</strong><p>以近兩年日線回測，量化勝率、期望報酬與相對基準優勢。</p></div>
+    </div>
+    <p class="disclaimer">⚠️ 本工具輸出為技術面統計分析，不構成投資建議。市場有風險，請自行評估並控管部位。</p>
+  </section>
+
+  <!-- ============ 分析結果 ============ -->
+  <div id="result" hidden>
+
+    <!-- 報價頭部 -->
+    <section class="quote-card" aria-label="即時報價">
+      <div class="quote-main">
+        <div class="quote-title">
+          <h1 id="qName">—</h1>
+          <div class="quote-tags">
+            <span class="tag" id="qSymbol">—</span>
+            <span class="tag tag-ghost" id="qMarket">—</span>
+            <span class="tag tag-ghost" id="qExchange">—</span>
+          </div>
+        </div>
+        <div class="quote-price">
+          <span class="price" id="qPrice">—</span>
+          <span class="price-currency" id="qCurrency"></span>
+          <span class="price-change" id="qChange">—</span>
+        </div>
+      </div>
+      <div class="quote-stats">
+        <div class="stat"><span class="stat-k">今日區間</span><span class="stat-v" id="qDayRange">—</span></div>
+        <div class="stat"><span class="stat-k">前收</span><span class="stat-v" id="qPrevClose">—</span></div>
+        <div class="stat"><span class="stat-k">成交量</span><span class="stat-v" id="qVolume">—</span></div>
+        <div class="stat"><span class="stat-k">ATR(14)</span><span class="stat-v" id="qAtr">—</span></div>
+        <div class="stat"><span class="stat-k">30日振幅</span><span class="stat-v" id="qRange252">—</span></div>
+        <div class="stat"><span class="stat-k">RSI(14)</span><span class="stat-v" id="qRsi">—</span></div>
+      </div>
+      <div class="verdict-row">
+        <div class="verdict" id="verdictBadge">
+          <span class="verdict-label" id="verdictLabel">—</span>
+          <span class="verdict-score" id="verdictScore">—</span>
+        </div>
+        <div class="verdict-bar-wrap">
+          <div class="verdict-bar"><div class="verdict-fill" id="verdictFill" style="width:0%"></div></div>
+          <span class="verdict-bar-cap">技術面綜合評分</span>
+        </div>
+      </div>
+      <p id="fuzzyNote" class="fuzzy-note" hidden></p>
+    </section>
+
+    <!-- 買入區間 + 機率 -->
+    <section class="grid-2">
+      <article class="card buy-card" aria-label="建議買入區間">
+        <header class="card-head">
+          <h2>建議買入區間</h2>
+          <span class="badge" id="zoneBasisBadge">—</span>
+        </header>
+        <div class="zone-price">
+          <span id="zoneLower">—</span>
+          <span class="zone-tilde">~</span>
+          <span id="zoneUpper">—</span>
+          <span class="zone-cur" id="zoneCurrency"></span>
+        </div>
+        <div class="zone-visual" id="zoneVisual" aria-hidden="true"></div>
+        <ul class="zone-list">
+          <li><span class="zl-k">主要依據</span><span class="zl-v" id="zoneBasis">—</span></li>
+          <li><span class="zl-k">重合技術位</span><span class="zl-v" id="zoneSupporting">—</span></li>
+          <li><span class="zl-k">停損參考</span><span class="zl-v neg" id="zoneStop">—</span></li>
+          <li><span class="zl-k">目標參考</span><span class="zl-v pos" id="zoneTarget">—</span></li>
+          <li><span class="zl-k">盈虧比</span><span class="zl-v" id="zoneRR">—</span></li>
+        </ul>
+        <p class="zone-hint" id="zoneHint"></p>
+      </article>
+
+      <article class="card prob-card" aria-label="機率分析">
+        <header class="card-head">
+          <h2>準確度與獲利機率</h2>
+          <span class="badge" id="confidenceBadge">—</span>
+        </header>
+        <div class="gauge-row">
+          <div class="gauge" data-target="probUp20">
+            <svg viewBox="0 0 120 120" class="gauge-svg" aria-hidden="true">
+              <circle class="gauge-track" cx="60" cy="60" r="50"></circle>
+              <circle class="gauge-arc" cx="60" cy="60" r="50" id="arcUp20"></circle>
+            </svg>
+            <div class="gauge-center">
+              <strong id="valUp20">—</strong>
+              <span>20日上漲</span>
+            </div>
+          </div>
+          <div class="gauge" data-target="probProfit">
+            <svg viewBox="0 0 120 120" class="gauge-svg" aria-hidden="true">
+              <circle class="gauge-track" cx="60" cy="60" r="50"></circle>
+              <circle class="gauge-arc" cx="60" cy="60" r="50" id="arcProfit"></circle>
+            </svg>
+            <div class="gauge-center">
+              <strong id="valProfit">—</strong>
+              <span>獲利機率</span>
+            </div>
+          </div>
+        </div>
+        <ul class="zone-list compact">
+          <li><span class="zl-k">10 日上漲機率</span><span class="zl-v" id="valUp10">—</span></li>
+          <li><span class="zl-k">歷史樣本數</span><span class="zl-v" id="valSamples">—</span></li>
+          <li><span class="zl-k">同期基準機率</span><span class="zl-v" id="valBase">—</span></li>
+          <li><span class="zl-k">相對優勢</span><span class="zl-v" id="valEdge">—</span></li>
+        </ul>
+        <p class="zone-hint" id="probHint"></p>
+      </article>
+    </section>
+
+    <!-- 圖表 -->
+    <section class="card chart-card" aria-label="價格走勢圖">
+      <header class="card-head">
+        <h2>價格走勢與技術位</h2>
+        <div class="tab-group" role="group" aria-label="顯示層切換">
+          <button class="tab active" data-overlay="ma">均線</button>
+          <button class="tab active" data-overlay="levels">支撐壓力</button>
+          <button class="tab" data-overlay="boll">布林</button>
+          <button class="tab" data-overlay="vol">量能</button>
+        </div>
+      </header>
+      <div class="chart-wrap">
+        <canvas id="priceChart" role="img" aria-label="K 線圖，標示均線與支撐壓力位"></canvas>
+        <div class="chart-tooltip" id="chartTooltip" hidden></div>
+      </div>
+      <div class="chart-legend" id="chartLegend"></div>
+    </section>
+
+    <!-- 技術位表格 -->
+    <section class="grid-2">
+      <article class="card" aria-label="關鍵技術位">
+        <header class="card-head"><h2>關鍵技術位</h2></header>
+        <div class="table-wrap">
+          <table class="levels-table">
+            <thead>
+              <tr><th>類型</th><th class="num">價位</th><th class="num">距現價</th><th class="num">觸及次數</th></tr>
+            </thead>
+            <tbody id="levelsBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card" aria-label="均線位置">
+        <header class="card-head"><h2>各週期均線位置</h2></header>
+        <div class="table-wrap">
+          <table class="levels-table">
+            <thead>
+              <tr><th>均線</th><th class="num">價位</th><th class="num">距現價</th><th class="num">斜率</th><th>狀態</th></tr>
+            </thead>
+            <tbody id="maBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- 近期高低點 -->
+    <section class="card" aria-label="近期高低點與回撤">
+      <header class="card-head"><h2>近期高低點與斐波那契回撤</h2></header>
+      <div class="range-grid" id="rangeGrid"></div>
+      <div class="fib-wrap">
+        <div class="fib-bar" id="fibBar"></div>
+        <div class="fib-list" id="fibList"></div>
+      </div>
+    </section>
+
+    <!-- 判斷依據 -->
+    <section class="card" aria-label="買入位判斷依據">
+      <header class="card-head"><h2>買入位判斷依據</h2></header>
+      <div class="breakdown" id="scoreBreakdown"></div>
+      <div class="rationale" id="rationale"></div>
+    </section>
+
+    <!-- 回測明細 -->
+    <section class="card" aria-label="歷史回測明細">
+      <header class="card-head">
+        <h2>歷史回測明細</h2>
+        <span class="badge" id="btBadge">—</span>
+      </header>
+      <div class="bt-grid" id="btGrid"></div>
+      <div class="table-wrap">
+        <table class="levels-table">
+          <thead><tr><th>觸發日期</th><th class="num">進場價</th><th class="num">10日後</th><th class="num">20日後</th></tr></thead>
+          <tbody id="btBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 通知 -->
+    <section class="card notify-card" aria-label="通知設定">
+      <header class="card-head"><h2>價格異動與新聞通知</h2></header>
+      <div class="notify-row">
+        <label class="switch">
+          <input type="checkbox" id="notifyToggle">
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+          <span class="switch-text">透過 Telegram 發送本標的通知</span>
+        </label>
+        <button class="ghost-btn" id="notifyBtn" disabled>發送測試通知</button>
+      </div>
+      <p class="hint-line" id="notifyStatus">—</p>
+      <div id="notifyPreview" class="notify-preview" hidden></div>
+    </section>
+
+    <!-- 頁腳資訊 -->
+    <footer class="data-footer">
+      <div><span class="fk">資料更新時間</span><span id="fUpdated">—</span></div>
+      <div><span class="fk">資料來源</span><span id="fSource">—</span></div>
+      <div><span class="fk">報價延遲</span><span id="fDelay">—</span></div>
+      <p class="disclaimer">本頁面所有價位與機率均為歷史資料統計結果，不保證未來表現，不構成投資建議。</p>
+    </footer>
+
+  </div>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
