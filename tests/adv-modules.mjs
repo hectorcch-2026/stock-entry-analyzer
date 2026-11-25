@@ -10,13 +10,13 @@
  *   6. 原有功能未被破壞（報價、評分、買入區間、回測仍在）
  *
  * 用法：
- *   node tests/adv-modules.mjs                          # 預設 127.0.0.1:5199
+ *   node tests/adv-modules.mjs                          # 預設 127.0.0.1:5177
  *   BASE=https://xxx.onrender.com/ node tests/adv-modules.mjs
  *   SYMBOL=AAPL BASE=... node tests/adv-modules.mjs     # 指定標的
  */
 import { chromium } from 'playwright';
 
-const BASE = process.env.BASE || 'http://127.0.0.1:5199/';
+const BASE = process.env.BASE || 'http://127.0.0.1:5177/';
 const SYMBOL = process.env.SYMBOL || 'AAPL';
 
 const results = [];

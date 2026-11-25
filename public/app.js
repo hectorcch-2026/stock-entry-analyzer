@@ -789,9 +789,16 @@
 
     // 資料缺失：明確提示原因與替代方案，不顯示空殼
     if (!mod.available) {
-      var flag = mod.transient
-        ? '<span class="adv-flag adv-flag-warn">暫時無法取得</span>'
-        : '<span class="adv-flag adv-flag-na">資料不可用</span>';
+      // 三種不可用要講清楚差別，否則使用者會一直重整一個永遠不會好的模組：
+      //   blocked   → 上游拒絕（環境限制），重試無用，直接導向替代平台
+      //   transient → 限流／連線，稍後重整即可
+      //   其餘       → 此標的本来就没有（如港股無期權市場）
+      var flag = mod.blocked
+        ? '<span class="adv-flag adv-flag-na">環境無法取得</span>'
+        : mod.transient
+          ? '<span class="adv-flag adv-flag-warn">暫時無法取得</span>'
+          : '<span class="adv-flag adv-flag-na">資料不可用</span>';
+      var reasonCls = mod.blocked ? '' : mod.transient ? ' adv-na-transient' : '';
       return '<article class="adv-mod adv-mod-na" data-key="' + esc(mod.key) + '">'
         + '<header class="adv-mhead">'
         + '<div class="adv-mtitle">'
@@ -800,7 +807,7 @@
         + '</div>' + flag
         + '</header>'
         + '<div class="adv-na-box">'
-        + '<p class="adv-na-reason' + (mod.transient ? ' adv-na-transient' : '') + '">'
+        + '<p class="adv-na-reason' + reasonCls + '">'
         + esc(mod.reason || '此模組目前無法計算。') + '</p>'
         + (mod.hint ? '<p class="adv-na-hint">' + esc(mod.hint) + '</p>' : '')
         + renderAdvDimension(mod.dimension)
