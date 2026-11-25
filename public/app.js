@@ -9,7 +9,7 @@
 
   var state = {
     data: null,
-    overlays: { ma: true, levels: true, boll: false, vol: false },
+    overlays: { ma: true, levels: true, vp: true, fvg: true, boll: false, vol: false },
     hoverIndex: null,
     chartGeom: null,
     suggestTimer: null,
@@ -948,6 +948,16 @@
     boll: '#a855f7', grid: '#eef1f5', axis: '#98a2b3', text: '#475467',
     zone: 'rgba(29,78,216,.14)', zoneEdge: '#1d4ed8',
     support: '#0f9d58', resistance: '#d92b2b', vol: 'rgba(29,78,216,.35)',
+    // 籌碼分佈（成交量分佈）：用藍色系，與支撐壓力的紅綠語義區隔，避免誤讀
+    vpBar: 'rgba(29,78,216,.16)',
+    vpBarVA: 'rgba(29,78,216,.30)',
+    vpBarPOC: 'rgba(217,43,43,.55)',
+    poc: '#d92b2b', vah: '#1d4ed8', val: '#64748b',
+    // FVG：看漲用紅（偏多）、看跌用綠（偏空），符合紅漲綠跌慣例
+    // 透明度調高到 .18：.13 在白底上幾乎看不出來（實測取樣 alpha 只有 10 幾），
+    // 但又不至於濃到蓋住 K 線實體。
+    fvgBull: 'rgba(217,43,43,.18)', fvgBullEdge: 'rgba(217,43,43,.65)',
+    fvgBear: 'rgba(15,157,88,.18)', fvgBearEdge: 'rgba(15,157,88,.65)',
   };
 
   function setupCanvas() {
@@ -996,6 +1006,25 @@
     d.levels.resistances.forEach(function (s) { pool.push(s.price); });
     pool.push(d.buyZone.lower, d.buyZone.upper);
 
+    /**
+     * 進階模組的價位也要納入 Y 軸範圍。
+     * 只用 K 線高低點算範圍時，POC／VAH／VAL 或 FVG 區間若落在
+     * 近期區間之外就會被畫到圖外（看起來像「沒畫」）。
+     * 這裡刻意只納入「會被繪製」的層，避免關掉圖層後白白壓縮 K 線。
+     */
+    var advData = advChartData(d);
+    if (state.overlays.vp && advData.vp) {
+      [advData.vp.poc, advData.vp.vah, advData.vp.val].forEach(function (v) {
+        if (v != null && isFinite(v)) pool.push(v);
+      });
+    }
+    if (state.overlays.fvg && advData.fvg) {
+      advData.fvg.forEach(function (g) {
+        if (isFinite(g.lower)) pool.push(g.lower);
+        if (isFinite(g.upper)) pool.push(g.upper);
+      });
+    }
+
     var poolMin = pool.length ? Math.min.apply(null, pool) : lo;
     var poolMax = pool.length ? Math.max.apply(null, pool) : hi;
     var padY = (hi - lo) * 0.08;
@@ -1011,6 +1040,9 @@
     var yOf = function (v) { return padT + plotH * (1 - (v - lo) / (hi - lo)); };
 
     state.chartGeom = { xOf: xOf, yOf: yOf, slot: slot, padL: padL, padT: padT, plotW: plotW, plotH: plotH, series: series, lo: lo, hi: hi, n: n };
+    // 供回歸測試斷言「技術位是否畫在正確的價格座標」。
+    // 掛在元素上而非 window，避免汙染全域；不影響任何渲染行為。
+    $('priceChart').__geom = state.chartGeom;
 
     // --- 網格與 Y 軸標籤 ---
     ctx.font = '11px ui-monospace, monospace';
@@ -1066,6 +1098,12 @@
       d.levels.resistances.forEach(function (s) { hline(ctx, yOf(s.price), padL, padL + plotW, COLORS.resistance); });
       ctx.setLineDash([]);
     }
+
+    // --- 進階圖層 ---
+    // 兩者都畫在 K 線之前，才不會蓋住蠟燭實體；順序上先畫區塊（FVG）
+    // 再畫線（POC/VAH/VAL），最後才畫 K 線，形成正確的疊放層級。
+    if (state.overlays.fvg) drawFVG(ctx, advData.fvg, xOf, yOf, padL, plotW, padT, plotH);
+    if (state.overlays.vp) drawVolumeProfile(ctx, advData.vp, yOf, padL, plotW, padT, plotH);
 
     // --- K 線 ---
     for (var k = 0; k < n; k++) {
@@ -1141,6 +1179,160 @@
     renderLegend(d, maSeries);
   }
 
+  /**
+   * 從 advancedTools 取出圖表需要的資料
+   *
+   * 這裡有一個容易錯的對應關係：後端算 FVG 用「全部 K 線」（lookback 120），
+   * 而圖表只畫最近 250 根。FVG 的 barsAgo 是「距最後一根幾根」，
+   * 所以換算成圖表索引就是 n - 1 - barsAgo。用這個方式對齊，
+   * 不管後端 lookback 幾根都正確，不需要兩邊共用常數。
+   */
+  function advChartData(d) {
+    var out = { vp: null, fvg: null };
+    var at = d && d.advancedTools;
+    if (!at || !at.modules) return out;
+
+    at.modules.forEach(function (m) {
+      if (!m.available || !m.data) return;
+
+      if (m.key === 'vrvp') {
+        var prof = m.data.profile || [];
+        var val = prof.filter(function (b) { return b.volume > 0; });
+        if (!val.length) return;
+        var maxV = 0;
+        val.forEach(function (b) { if (b.volume > maxV) maxV = b.volume; });
+        out.vp = {
+          poc: m.data.poc, vah: m.data.vah, val: m.data.val,
+          profile: prof, maxV: maxV,
+        };
+      }
+
+      if (m.key === 'fvg') {
+        // 只畫未回補的缺口（已回補的畫上去只會變成雜訊），
+        // 且只保留落在圖表可見範圍內的，避免右側延伸帶互相重疊。
+        var n = (d.series && d.series.daily ? d.series.daily.length : 0);
+        out.fvg = (m.data.active || [])
+          .map(function (g) {
+            var idx = n - 1 - (g.barsAgo || 0);
+            return { lower: g.lower, upper: g.upper, direction: g.direction, fromIdx: idx, fillRatio: g.fillRatio, label: g.label };
+          })
+          .filter(function (g) { return g.fromIdx >= 0 && g.fromIdx < n; });
+      }
+    });
+
+    return out;
+  }
+
+  /** 成交量分佈：從左側（或右側）往內長的橫向柱狀，附 POC / VAH / VAL */
+  function drawVolumeProfile(ctx, vp, yOf, padL, plotW, padT, plotH) {
+    if (!vp || !vp.profile || !vp.profile.length || !vp.maxV) return;
+
+    // 柱狀最寬佔繪圖區 18%，太寬會遮住 K 線，太窄看不出形狀
+    var maxBarW = Math.min(plotW * 0.18, 96);
+    /**
+     * 靠「左側」往右長，而不是右側。
+     *
+     * 原因：FVG 區間帶是從缺口形成處「向右延伸到最新一根」，
+     * 佔用的是畫面右半部。若成交量分佈也貼右側，兩者會疊在同一塊
+     * 區域互相蓋掉（實測 FVG 的紅色填充被柱狀圖蓋成紫色）。
+     * 慣例上 TradingView 的 Volume Profile 也預設畫在左側，
+     * 左 VP + 右 FVG 正好分工，視覺上互不干擾。
+     */
+    var left = padL;
+
+    ctx.save();
+    vp.profile.forEach(function (bin) {
+      if (!(bin.volume > 0)) return;
+      var w = (bin.volume / vp.maxV) * maxBarW;
+      if (w < 0.6) return;      // 極細的格省略，避免糊成一團
+
+      var yTop = yOf(bin.to);
+      var yBot = yOf(bin.from);
+      var h = Math.max(1, Math.abs(yBot - yTop));
+
+      var fill = bin.isPOC ? COLORS.vpBarPOC
+        : bin.inVA ? COLORS.vpBarVA
+          : COLORS.vpBar;
+      ctx.fillStyle = fill;
+      ctx.fillRect(left, Math.min(yTop, yBot), w, h);
+    });
+
+    // POC / VAH / VAL 三條關鍵線
+    var marks = [
+      { v: vp.poc, c: COLORS.poc, lw: 1.6, dash: [] },
+      { v: vp.vah, c: COLORS.vah, lw: 1.1, dash: [5, 3] },
+      { v: vp.val, c: COLORS.val, lw: 1.1, dash: [5, 3] },
+    ];
+    marks.forEach(function (mk) {
+      if (mk.v == null || !isFinite(mk.v)) return;
+      var y = Math.round(yOf(mk.v)) + 0.5;
+      if (y < padT - 1 || y > padT + plotH + 1) return;   // 超出繪圖區就不畫
+      ctx.strokeStyle = mk.c;
+      ctx.lineWidth = mk.lw;
+      ctx.setLineDash(mk.dash);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 左側標籤（置於柱狀圖右緣之外，避免壓在柱子上）
+      var txt = mk.v === vp.poc ? 'POC' : mk.v === vp.vah ? 'VAH' : 'VAL';
+      ctx.font = '600 10px ui-monospace, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = mk.c;
+      ctx.fillText(txt + ' ' + fmtPrice(mk.v), padL + maxBarW + 6, y - 2);
+    });
+    ctx.restore();
+  }
+
+  /** FVG：從缺口形成的那根 K 線起，向右延伸成區間帶 */
+  function drawFVG(ctx, gaps, xOf, yOf, padL, plotW, padT, plotH) {
+    if (!gaps || !gaps.length) return;
+
+    var right = padL + plotW;
+    ctx.save();
+    gaps.forEach(function (g) {
+      if (!isFinite(g.lower) || !isFinite(g.upper)) return;
+
+      var yTop = yOf(g.upper);
+      var yBot = yOf(g.lower);
+      if (yTop > padT + plotH || yBot < padT) return;   // 完全在畫面外
+
+      var x = Math.max(padL, xOf(g.fromIdx));
+      var w = right - x;
+      if (w <= 1) return;
+
+      var bull = g.direction === 'bullish';
+      ctx.fillStyle = bull ? COLORS.fvgBull : COLORS.fvgBear;
+      ctx.fillRect(x, Math.min(yTop, yBot), w, Math.max(1, Math.abs(yBot - yTop)));
+
+      // 上下邊界線（虛線），讓區間的上下沿看得出來
+      ctx.strokeStyle = bull ? COLORS.fvgBullEdge : COLORS.fvgBearEdge;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      [yTop, yBot].forEach(function (y) {
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+
+      // 已回補比例：用一小段實線標在起點，一眼看出這個缺口被吃掉多少
+      if (g.fillRatio > 0) {
+        var full = Math.abs(yBot - yTop);
+        var fh = full * Math.min(1, g.fillRatio);
+        var fromBottom = bull;   // 看漲缺口由上方回補，看跌由下方回補
+        var fy = fromBottom ? Math.min(yTop, yBot) : Math.min(yTop, yBot) + full - fh;
+        ctx.fillStyle = bull ? 'rgba(217,43,43,.30)' : 'rgba(15,157,88,.30)';
+        ctx.fillRect(x, fy, Math.min(14, w), Math.max(1, fh));
+      }
+    });
+    ctx.restore();
+  }
+
   function hline(ctx, y, x1, x2, color) {
     ctx.strokeStyle = color;
     ctx.beginPath();
@@ -1189,6 +1381,46 @@
     return v.toFixed(3);
   }
 
+  /**
+   * hover 時補上「這根 K 線」與進階技術位的關係
+   *
+   * 純線圖看得到位置，但看不出「相對關係」。這裡直接算給你看：
+   * 收盤價在不在價值區內、有沒有落在某個未回補缺口裡。
+   * 這些判斷只用來輔助閱讀，不改變任何分析結論。
+   */
+  function hoverAdvLines(d, bar) {
+    var at = d && d.advancedTools;
+    if (!at || !at.modules) return '';
+    var out = '';
+
+    at.modules.forEach(function (m) {
+      if (!m.available || !m.data) return;
+
+      if (m.key === 'vrvp' && state.overlays.vp) {
+        var vp = m.data;
+        if (vp.vah == null || vp.val == null) return;
+        var inside = bar.c >= vp.val && bar.c <= vp.vah;
+        out += '<br><span style="opacity:.75">價值區 </span>'
+          + (inside ? '區內' : bar.c > vp.vah ? '在上方' : '在下方')
+          + '<span style="opacity:.5"> / POC ' + fmtPrice(vp.poc) + '</span>';
+      }
+
+      if (m.key === 'fvg' && state.overlays.fvg) {
+        var hit = null;
+        (m.data.active || []).forEach(function (g) {
+          if (bar.c >= g.lower && bar.c <= g.upper) hit = g;
+        });
+        if (hit) {
+          out += '<br><span style="opacity:.75">位於</span> '
+            + (hit.direction === 'bullish' ? '看漲' : '看跌') + ' FVG '
+            + fmtPrice(hit.lower) + '~' + fmtPrice(hit.upper);
+        }
+      }
+    });
+
+    return out;
+  }
+
   function renderLegend(d, maSeries) {
     var items = [];
     if (state.overlays.ma) maSeries.forEach(function (m) {
@@ -1203,6 +1435,16 @@
       items.push('<span><i class="lg-line" style="background:' + COLORS.up + '"></i>目標</span>');
     }
     if (state.overlays.vol) items.push('<span>下方柱狀為成交量</span>');
+    if (state.overlays.vp) {
+      items.push('<span><i class="lg-line" style="background:' + COLORS.poc + '"></i>POC 控制點</span>');
+      items.push('<span><i class="lg-dash" style="color:' + COLORS.vah + '"></i>VAH 價值區上界</span>');
+      items.push('<span><i class="lg-dash" style="color:' + COLORS.val + '"></i>VAL 價值區下界</span>');
+      items.push('<span><i class="lg-box" style="background:' + COLORS.vpBarVA + '"></i>成交量分佈</span>');
+    }
+    if (state.overlays.fvg) {
+      items.push('<span><i class="lg-box" style="background:' + COLORS.fvgBull + ';border-color:' + COLORS.fvgBullEdge + '"></i>看漲 FVG</span>');
+      items.push('<span><i class="lg-box" style="background:' + COLORS.fvgBear + ';border-color:' + COLORS.fvgBearEdge + '"></i>看跌 FVG</span>');
+    }
     $('chartLegend').innerHTML = items.join('');
   }
 
@@ -1250,7 +1492,8 @@
       tip.innerHTML = '<strong>' + dt.toLocaleDateString('zh-TW') + '</strong><br>'
         + '開 ' + fmt(b.o) + '　高 ' + fmt(b.h) + '<br>'
         + '低 ' + fmt(b.l) + '　收 ' + fmt(b.c) + '<br>'
-        + '漲跌 ' + pct(chg, 2) + '　量 ' + fmtInt(b.v);
+        + '漲跌 ' + pct(chg, 2) + '　量 ' + fmtInt(b.v)
+        + hoverAdvLines(state.data, b);
       tip.hidden = false;
       tip.style.left = Math.min(rect.width - 70, Math.max(70, g.xOf(idx))) + 'px';
       tip.style.top = Math.max(80, g.yOf(b.c) - 8) + 'px';

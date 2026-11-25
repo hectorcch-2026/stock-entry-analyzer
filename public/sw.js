@@ -23,7 +23,9 @@
 // v1.0.2：新增進階技術分析四模組（VRVP / AVWAP / FVG / GEX），
 //         index.html、app.js、styles.css 三者皆變動，必須升版
 //         否則舊用戶的 Stale-While-Revalidate 會先回舊檔案。
-const VERSION = 'v1.0.2';
+// v1.0.3：把 VRVP 的 POC/VAH/VAL 與 FVG 區間帶疊加到互動 K 線圖，
+//         同樣動到 index.html / app.js / styles.css，需再升版。
+const VERSION = 'v1.0.3';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

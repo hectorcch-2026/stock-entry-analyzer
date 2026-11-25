@@ -462,6 +462,11 @@ body {
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .lg-line { width: 16px; height: 3px; border-radius: 2px; flex: none; }
 .lg-dash { width: 16px; height: 0; border-top: 2px dashed currentColor; flex: none; }
+/* 區塊型圖例（成交量分佈、FVG 區間）：實心小方塊 + 可選邊框 */
+.lg-box {
+  width: 14px; height: 10px; border-radius: 2px; flex: none;
+  border: 1px solid transparent;
+}
 
 /* ---------------- 表格 ---------------- */
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }

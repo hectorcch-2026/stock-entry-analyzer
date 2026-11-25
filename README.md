@@ -315,6 +315,33 @@ cp config.example.json config.json   # 再填入 botToken / chatId
 **既有欄位完全不動**（`score` / `buyZone` / `backtest` / `levels` / `series` …），
 四個模組各自獨立 try，任一失敗只讓該卡片顯示不可用，不影響主分析與 Telegram 通知。
 
+#### 圖表疊加：把價位畫回 K 線圖上
+
+文字卡片講「在哪裡」，圖上看「離多遠」——兩者互補。因此其中兩個模組
+同時疊加到互動 K 線圖，並提供獨立開關（圖表右上「籌碼分佈」「FVG 缺口」）：
+
+- **成交量分佈**：橫向柱狀圖畫在**左側**（POC 紅、Value Area 內較深、其餘淡藍），
+  並標出 POC / VAH / VAL 三條線與左側價位標籤。
+- **FVG 缺口**：從缺口形成的那根 K 線起，**向右延伸**成半透明區間帶
+  （看漲紅、看跌綠），上下沿為虛線；缺口起點另加一小段實線表示已回補比例。
+
+三個實作細節值得記下來：
+
+1. **左 VP + 右 FVG 是刻意的分工。** 一開始把成交量分佈也貼右側，
+   結果 FVG 的紅色填充被柱狀圖整片蓋掉（取樣到的是紫色混合色）。
+   分開之後兩者互不干擾，也符合 TradingView 的慣例。
+2. **Y 軸範圍要把技術位納入。** 只用 K 線高低點算範圍時，POC/VAH/VAL
+   或 FVG 若落在近期區間外，會被畫到圖外、看起來像「沒畫」。
+3. **`barsAgo` 對應圖表索引是 `n - 1 - barsAgo`。** 後端用全部 K 線算 FVG，
+   圖表只畫最近 250 根；用「距最後一根幾根」換算，兩邊不必共用常數。
+
+hover 時 tooltip 除了 OHLC 與量，還會多一行顯示「這根收盤價在價值區內/外」
+以及「是否落在某個未回補缺口裡」——把線圖上的位置直接翻成一句判斷。
+
+> 對應測試 `npm run test:chart` 不看「畫布有沒有顏色」，而是把 POC/VAH/VAL
+> 的價格換算成預期像素列，再去那一列取樣驗證。技術位若畫在錯誤價位，
+> 比不畫更危險（使用者會依此下單），所以值得用座標而不是截圖來守。
+
 ---
 
 ## 資料來源與更新機制
@@ -541,6 +568,7 @@ npm start                          # 另開一個終端
 npm run test:escape                # 通知訊息 HTML 轉義（15 項，純函式不需連網）
 npm run test:hidden                # hidden 屬性可見性（4 項，防離線橫條常駐）
 npm run test:adv                   # 進階分析四模組 UI 與資料完整性（25 項）
+npm run test:chart                 # 圖表技術位疊加的座標正確性（13 項）
 npm run test:pwa                   # PWA：manifest、圖示、Service Worker、離線行為（33 項）
 npm run test:layout                # 三種螢幕尺寸版面與渲染驗證
 npm run test:flow                  # 自動完成、載入狀態、圖表切換
@@ -567,6 +595,7 @@ iPhone 獨立模式前端行為、PWA 安裝性（以 Chromium `Page.getInstalla
 | `test:escape` | 15 / 15 |
 | `test:hidden` | 4 / 4 |
 | `test:adv` | 25 / 25 |
+| `test:chart` | 13 / 13 |
 | `test:pwa` | 33 / 33 |
 | `test:ios` | 34 / 34 |
 | `test:deployed` | **28 / 28** |
