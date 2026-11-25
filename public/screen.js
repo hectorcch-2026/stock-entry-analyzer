@@ -321,12 +321,37 @@
     return '<span class="verdict-pill ' + tone + '">' + esc(v.label || '—') + '</span>';
   }
 
+  /**
+   * 依「最主要被排除的原因」給對應的放寬按鈕。
+   *
+   * 原本不論原因一律給同樣三個選項，等於沒回答「該放寬哪一條」。
+   * 現在以 reasons[0].code（後端已按次數排序）決定第一顆按鈕，
+   * 其餘仍保留通用選項，讓使用者還是能自行調整。
+   */
   function addRelaxActions(container, reasons) {
-    var acts = [
-      { label: '評分放寬到 40', apply: { minScore: 40 } },
-      { label: '距買區放寬到 6 ATR', apply: { maxDistAtr: 6 } },
-      { label: '恢復預設條件', apply: null },
-    ];
+    var top = (reasons && reasons[0] && reasons[0].code) || null;
+    var byCode = {
+      score: { label: '評分放寬到 40', apply: { minScore: 40 } },
+      distAtr: { label: '距買區放寬到 6 ATR', apply: { maxDistAtr: 6 } },
+      price: { label: '股價下限降到 0', apply: { minPrice: 0 } },
+      atrPct: { label: '波動上限放寬到 20%', apply: { maxAtrPct: 20 } },
+      avgVol: { label: '移除均量下限', apply: { minAvgVol: 0 } },
+      pred: { label: '不要求區間預測', apply: { requirePred: false } },
+    };
+    var acts = [];
+    if (top && byCode[top]) acts.push(byCode[top]);
+    acts.push({ label: '評分放寬到 40', apply: { minScore: 40 } });
+    acts.push({ label: '距買區放寬到 6 ATR', apply: { maxDistAtr: 6 } });
+    acts.push({ label: '恢復預設條件', apply: null });
+
+    // 去重：主因對應的按鈕可能與通用選項重複
+    var seen = {};
+    acts = acts.filter(function (a) {
+      if (seen[a.label]) return false;
+      seen[a.label] = true;
+      return true;
+    });
+
     acts.forEach(function (a) {
       var b = document.createElement('button');
       b.type = 'button';
