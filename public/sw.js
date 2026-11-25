@@ -17,7 +17,11 @@
  *  3. 導覽請求（含 ?symbol= 查詢）→ Network-First，離線回退到快取的 index.html
  */
 
-const VERSION = 'v1.0.0';
+// 版本號一變，下列三個快取名也跟著變，activate 時舊快取會被清掉。
+// v1.0.1：styles.css 加入 :where([hidden]){display:none}，
+//         修復離線橫條等 10 個元素 hidden 失效而常駐顯示的問題。
+//         必須升版，否則舊用戶的 Stale-While-Revalidate 會先回舊 CSS。
+const VERSION = 'v1.0.1';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

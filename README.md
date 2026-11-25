@@ -483,6 +483,7 @@ curl "http://localhost:5177/api/search?q=騰訊"
 npm i -D playwright && npx playwright install chromium
 npm start                          # 另開一個終端
 npm run test:escape                # 通知訊息 HTML 轉義（15 項，純函式不需連網）
+npm run test:hidden                # hidden 屬性可見性（4 項，防離線橫條常駐）
 npm run test:pwa                   # PWA：manifest、圖示、Service Worker、離線行為（33 項）
 npm run test:layout                # 三種螢幕尺寸版面與渲染驗證
 npm run test:flow                  # 自動完成、載入狀態、圖表切換
@@ -507,10 +508,34 @@ iPhone 獨立模式前端行為、PWA 安裝性（以 Chromium `Page.getInstalla
 | 套件 | 結果 |
 |---|---|
 | `test:escape` | 15 / 15 |
+| `test:hidden` | 4 / 4 |
 | `test:pwa` | 33 / 33 |
 | `test:ios` | 34 / 34 |
 | `test:deployed` | **28 / 28** |
 | `test:layout` / `test:flow` / `test:notify` | 全數通過 |
+
+### ⚠️ 已知陷阱：`[hidden]` 會被作者樣式覆蓋
+
+HTML 的 `hidden` 屬性只靠瀏覽器預設樣式 `[hidden]{display:none}` 生效，
+而**作者樣式的優先級高於瀏覽器預設樣式**。因此只要元件的 CSS 寫了
+`display`（例如 `.offline-bar{display:flex}`），`hidden` 就完全失效——
+屬性值是 `true`，畫面上照樣顯示。
+
+這個坑實際造成過一個使用者可見的故障：**離線橫條「目前離線」永久常駐**，
+使用者誤以為網站一直斷線。當時 `e2e-pwa` 全部通過，因為測試斷言的是
+`el.hidden`（屬性為真），而不是元素實際可見性。
+
+修復與防護：
+
+```css
+:where([hidden]) { display: none !important; }
+```
+
+- 用 `:where()` 把特異性壓到 0，僅作最低限度兜底，不干擾正常 `display` 宣告
+- `test:hidden` 會比對「屬性值」與「實際可見性（`display:none` 或高度 0）」是否一致，
+  並實測斷網顯示 / 恢復隱藏的完整流程
+- 改動 `styles.css` 時務必同步升 `public/sw.js` 的 `VERSION`，
+  否則老用戶的 Stale-While-Revalidate 會先回舊 CSS，修復看起來沒生效
 
 > 離線測試說明：`e2e-pwa` 與 `e2e-deployed` 都會刻意斷網，期間的
 > `ERR_INTERNET_DISCONNECTED`、`Failed to fetch`、`503` 屬**預期行為**。
