@@ -7,6 +7,9 @@ config.json
 # 測試輸出
 tests/out-*.png
 
+# 執行期快取（選股結果／篩選快取，程式會自動建立目錄並重算）
+data/
+
 # 系統檔案
 .DS_Store
 Thumbs.db

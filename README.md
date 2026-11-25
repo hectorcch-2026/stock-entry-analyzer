@@ -561,8 +561,12 @@ curl -X POST http://localhost:5177/api/notify \
 | GET | `/api/health` | 健康檢查（含 Telegram 設定狀態） |
 | GET | `/api/config` | 取得通知設定狀態與評分權重 |
 | GET | `/api/search?q=` | 代碼 / 名稱搜尋（自動完成用） |
-| GET | `/api/analyze?symbol=` | 完整分析（買入區間、機率、回測、圖表資料、進階四模組） |
+| GET | `/api/analyze?symbol=` | 完整分析（買入區間、機率、回測、圖表資料、進階四模組、K 線區間預測、統計可信度） |
 | GET | `/api/news?symbol=&name=` | 相關新聞 |
+| GET | `/api/kline?symbol=&range=` | K 線序列（`3m`／`6m`／`1y`／`2y`／`5y`），供圖表時間區間切換 |
+| GET | `/api/screen?…` | AI 選股篩選，回傳符合條件的標的與完整統計 |
+| GET | `/api/screen/meta` | 篩選預設值、可排序欄位、標的池組成 |
+| GET | `/api/picks[?preview=1][?run=1]` | 每日排程候選清單（惰性補跑，詳見下節） |
 | POST | `/api/notify` | 發送 Telegram 通知 |
 | GET | `/api/diag*` | 來源連線診斷（見「來源診斷端點」） |
 
@@ -571,7 +575,58 @@ curl -X POST http://localhost:5177/api/notify \
 ```bash
 curl "http://localhost:5177/api/analyze?symbol=0700.HK"
 curl "http://localhost:5177/api/search?q=騰訊"
+curl "http://localhost:5177/api/kline?symbol=AAPL&range=2y"
+curl "http://localhost:5177/api/screen?market=hk&minScore=60&limit=10"
 ```
+
+### `/api/screen` 可用參數
+
+| 參數 | 範圍 | 預設 | 說明 |
+|---|---|---|---|
+| `market` | `all` / `us` / `hk` | `all` | 市場 |
+| `minScore` | 0–100 | 55 | 技術評分下限 |
+| `maxDistAtr` | 0–50 | 3 | 距買區上限（ATR 倍數） |
+| `minPrice` | ≥ 0 | 1 | 股價下限 |
+| `minAvgVol` | ≥ 0 | 0 | 20 日均量下限 |
+| `maxAtrPct` | 0.1–100 | 12 | 波動上限（ATR%） |
+| `requirePred` | `0` / `1` | `0` | 僅保留預測可用的標的（明顯變慢） |
+| `limit` | 1–200 | 30 | 回傳筆數上限 |
+| `sortBy` | `score`/`distAtr`/`atrPct`/`rrRatio`/`changePct`/`price`/`avgVol` | `score` | 排序欄位 |
+| `sortDir` | `asc` / `desc` | `desc` | 排序方向 |
+
+參數不合法時回 `400` 並在 `error.message` 逐條列出違規原因、`error.hint` 列出全部可用值：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "BAD_PARAMS",
+    "message": "評分下限必須是數字（收到「abc」）；回傳筆數必須介於 1 與 200 之間（收到 99999）",
+    "hint": "可用參數：market（all/us/hk）、minScore、…"
+  }
+}
+```
+
+### 每日排程與惰性補跑
+
+每日清單原本用 `setInterval` 定時產生，但免費方案的容器閒置 15 分鐘就會休眠，
+計時器根本不會觸發。因此改為**三層設計**：
+
+| 層 | 觸發方式 | 說明 |
+|---|---|---|
+| L1 惰性補跑 | 任何人造訪 `/api/picks`（不帶參數） | 檢查「今日收盤已過且今日清單不存在」→ 當場補跑並落檔 |
+| L2 進程內定時 | `ENABLE_INPROCESS_CRON=1` | 常駐環境才啟用，閒置休眠時無效 |
+| L3 外部排程 | `GET /api/picks?run=1&token=<PICKS_TOKEN>` | 由 cron / GitHub Actions 等外部服務觸發 |
+
+三層共用同一份每日檔案鎖 `data/picks/YYYY-MM-DD.json`，並採「**只在成功時落檔**」語意：
+補跑失敗不會寫入半成品，下次造訪會再試一次。
+
+| 環境變數 | 預設 | 作用 |
+|---|---|---|
+| `ENABLE_INPROCESS_CRON` | 未設定 | 設為 `1` 才啟用進程內定時器 |
+| `PICKS_TOKEN` | 未設定 | 設定後 `?run=1` 需帶 `&token=` 才允許強制重跑 |
+| `SCREEN_CONCURRENCY` | 4 | 篩選併發數（上限 8）。每檔會打 3 個上游請求，太高會觸發 429 |
+
 
 ---
 
@@ -586,6 +641,10 @@ npm run test:escape                # 通知訊息 HTML 轉義（15 項，純函�
 npm run test:hidden                # hidden 屬性可見性（4 項，防離線橫條常駐）
 npm run test:adv                   # 進階分析四模組 UI 與資料完整性（25 項）
 npm run test:chart                 # 圖表技術位疊加的座標正確性（13 項）
+npm run test:pred                  # K 線區間預測卡片（15 項）
+npm run test:v14                   # 三頁導航、圖表縮放、AI 選股、錯誤態（51 項）
+npm run test:ac01                  # 既有分析輸出不因 FP 改變的雜湊回歸（15 項）
+npm run test:forecast              # 預測模組單元測試與門檻行為（24 項）
 npm run test:pwa                   # PWA：manifest、圖示、Service Worker、離線行為（33 項）
 npm run test:layout                # 三種螢幕尺寸版面與渲染驗證
 npm run test:flow                  # 自動完成、載入狀態、圖表切換
@@ -613,10 +672,14 @@ iPhone 獨立模式前端行為、PWA 安裝性（以 Chromium `Page.getInstalla
 | `test:hidden` | 4 / 4 |
 | `test:adv` | 25 / 25 |
 | `test:chart` | 13 / 13 |
+| `test:pred` | 15 / 15 |
+| `test:v14` | **51 / 51** |
+| `test:ac01` | 15 / 15 |
+| `test:forecast` | 24 / 24 |
 | `test:pwa` | 33 / 33 |
 | `test:ios` | 34 / 34 |
 | `test:deployed` | **28 / 28** |
-| `test:layout` / `test:flow` / `test:notify` | 全數通過 |
+| `test:layout` / `test:flow` / `test:notify` / `e2e-detail` | 全數通過 |
 
 ### ⚠️ 已知陷阱：`[hidden]` 會被作者樣式覆蓋
 

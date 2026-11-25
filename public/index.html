@@ -39,6 +39,14 @@
         <span>美股 · 港股</span>
       </div>
     </div>
+
+    <!-- 三頁導航：K 線預測 / AI 選股 /（詳情頁時才出現「詳情」） -->
+    <nav class="main-nav" id="mainNav" aria-label="主要頁面">
+      <a href="#/predict" data-route="predict" class="nav-item active">K 線預測</a>
+      <a href="#/screen" data-route="screen" class="nav-item">AI 選股</a>
+      <a href="#/predict" data-route="detail" class="nav-item nav-detail" hidden>個股詳情</a>
+    </nav>
+
     <div class="topbar-meta">
       <span class="dot" id="statusDot"></span>
       <span id="statusText">就緒</span>
@@ -60,6 +68,17 @@
       </div>
     </div>
   </aside>
+
+  <!-- ============ 檢視一：K 線預測 / 個股詳情 ============ -->
+  <div id="viewChart">
+
+  <!-- 詳情頁返回列（僅 #/detail/… 時顯示） -->
+  <div id="detailBar" class="detail-bar" hidden>
+    <button type="button" id="detailBack" class="back-btn">
+      <span aria-hidden="true">←</span> 返回選股結果
+    </button>
+    <span class="db-crumb" id="detailCrumb">個股詳情</span>
+  </div>
 
   <!-- ============ 查詢區 ============ -->
   <section class="search-card" aria-label="股票查詢">
@@ -237,10 +256,134 @@
       </article>
     </section>
 
+    <!--
+      K 線區間預測（FP）
+      與上方「建議買入區間」「準確度與獲利機率」為**不同母體**：
+        - 買入區間：條件式（須觸及買區才取樣），有方向語義
+        - 本卡片：無條件式（從每個收盤點出發），只給價格區間，不給方向
+      規格 §2.3 明訂不得使用 COLORS.zone（藍）以免與買區混淆，
+      亦不得使用漲跌紅綠承載「機率」語義。此處以中性色 + 寬度視覺表達。
+    -->
+    <section class="card pred-card" id="predCard" aria-label="K 線區間預測" hidden>
+      <header class="card-head">
+        <h2>K 線區間預測</h2>
+        <span class="badge badge-neutral" id="predBadge">—</span>
+      </header>
+
+      <!-- 不可用狀態：明確說明原因，不給任何數值（AC-10） -->
+      <div id="predUnavailable" class="pred-unavailable" hidden>
+        <p class="pred-unavailable-title" id="predUnavailableTitle">—</p>
+        <p class="pred-unavailable-reason" id="predUnavailableReason"></p>
+      </div>
+
+      <!-- 正常狀態 -->
+      <div id="predBody" hidden>
+        <p class="pred-lede">
+          從今日收盤 <strong id="predBase">—</strong> 出發，未來各週期收盤價的
+          <strong>80% 可能區間</strong>（歷史分位數推估）
+        </p>
+
+        <div class="pred-rows" id="predRows">
+          <!-- 由 JS 依 horizons 動態產生 -->
+        </div>
+
+        <ul class="zone-list compact pred-meta">
+          <li><span class="zl-k">資料基準日</span><span class="zl-v" id="predAsOf">—</span></li>
+          <li><span class="zl-k">復權狀態</span><span class="zl-v" id="predAdj">—</span></li>
+          <li><span class="zl-k">區間校準（PICP）</span><span class="zl-v" id="predPicp">—</span></li>
+          <li><span class="zl-k">資料品質</span><span class="zl-v" id="predQuality">—</span></li>
+        </ul>
+
+        <!-- 強制的不確定性標示（規格 §8.4） -->
+        <p class="pred-note" id="predNote"></p>
+      </div>
+    </section>
+
+    <!--
+      統計可信度 + 區間位置
+      ---------------------------------------------------------------
+      **這不是方向機率**。規格 v1.3 的 A-31 裁決否決了「輸出上漲機率」：
+      48 個測試單元全部無法穩定贏過滾動基準，Brier 反而退化 1.1%–15.9%。
+
+      因此本卡片做兩件不同的事，且都必須標明語義，否則會被誤讀成投資建議：
+        1. 可信度 = 區間估計本身的品質（校準 + 樣本量 + 資料品質的加權）
+        2. 位置   = 80% 區間相對現價的**幾何分佈**，不是漲跌方向
+    -->
+    <section class="card cred-card" id="credCard" aria-label="統計可信度與區間位置" hidden>
+      <header class="card-head">
+        <h2>統計可信度與區間位置</h2>
+        <span class="badge badge-neutral" id="credBadge">—</span>
+      </header>
+
+      <div id="credUnavailable" class="pred-unavailable" hidden>
+        <p class="pred-unavailable-title">無法評估可信度</p>
+        <p class="pred-unavailable-reason" id="credUnavailableReason"></p>
+      </div>
+
+      <div id="credBody" hidden>
+        <div class="cred-head">
+          <div class="cred-gauge">
+            <svg viewBox="0 0 100 100" aria-hidden="true">
+              <circle class="cred-track" cx="50" cy="50" r="42"></circle>
+              <circle class="cred-ring" id="credRing" cx="50" cy="50" r="42"></circle>
+            </svg>
+            <div class="cred-gauge-center">
+              <strong id="credScore">—</strong>
+              <span>可信度</span>
+            </div>
+          </div>
+          <div class="cred-lead">
+            <p class="cred-label" id="credLabel">—</p>
+            <p class="cred-intro">
+              由「區間校準」「樣本充足度」「資料品質」三項加權得出，衡量的是這個價格區間本身有多可靠。
+            </p>
+          </div>
+        </div>
+
+        <div class="cred-components" id="credComponents"></div>
+
+        <h3 class="cred-sub">80% 區間相對現價的位置</h3>
+        <div class="cred-position" id="credPosition"></div>
+
+        <ul class="cred-notes" id="credNotes" hidden></ul>
+        <p class="pred-note" id="credDisclaimer"></p>
+      </div>
+    </section>
+
     <!-- 圖表 -->
     <section class="card chart-card" aria-label="價格走勢圖">
-      <header class="card-head">
-        <h2>價格走勢與技術位</h2>
+      <header class="card-head chart-head">
+        <div class="chart-title-row">
+          <h2>價格走勢與技術位</h2>
+          <!-- A1：三種分析模式，對應框架的三層濾網。切換模式即切換圖層組合。 -->
+          <div class="mode-group" role="group" aria-label="分析模式">
+            <button class="mode-btn active" data-mode="structure" title="結構模式：日線，看防守區在哪">結構</button>
+            <button class="mode-btn" data-mode="confirm" title="確認模式：1H／15M，看是真跌破還是掃損">確認</button>
+            <button class="mode-btn" data-mode="execute" title="執行模式：5M，看現在該不該扣扳機">執行</button>
+          </div>
+        </div>
+
+        <!-- 時間區間切換 + 縮放控制 -->
+        <div class="chart-tools">
+          <div class="range-group" role="group" aria-label="時間區間">
+            <button class="range-btn" data-range="3m">3 個月</button>
+            <button class="range-btn" data-range="6m">6 個月</button>
+            <button class="range-btn active" data-range="1y">1 年</button>
+            <button class="range-btn" data-range="2y">2 年</button>
+            <button class="range-btn" data-range="5y">5 年</button>
+          </div>
+          <div class="zoom-group" id="zoomBar" role="group" aria-label="縮放與平移">
+            <button type="button" class="icon-btn" id="zoomIn" title="放大（滾輪上／+）" aria-label="放大">＋</button>
+            <button type="button" class="icon-btn" id="zoomOut" title="縮小（滾輪下／−）" aria-label="縮小">－</button>
+            <button type="button" class="icon-btn" id="panLeft" title="往左平移（較早）" aria-label="往左平移">←</button>
+            <button type="button" class="icon-btn" id="panRight" title="往右平移（較晚）" aria-label="往右平移">→</button>
+            <button type="button" class="icon-btn wide" id="zoomReset" title="顯示全部（0）">重置</button>
+            <span class="zoom-label" id="zoomLabel">—</span>
+            <span class="zoom-range" id="zoomRange"></span>
+          </div>
+        </div>
+        <p class="range-status" id="rangeStatus" hidden></p>
+
         <div class="tab-group" role="group" aria-label="顯示層切換">
           <button class="tab active" data-overlay="ma">均線</button>
           <button class="tab active" data-overlay="levels">支撐壓力</button>
@@ -251,8 +394,14 @@
         </div>
       </header>
       <div class="chart-wrap">
-        <canvas id="priceChart" role="img" aria-label="K 線圖，標示均線與支撐壓力位"></canvas>
+        <canvas id="priceChart" role="img" tabindex="0" aria-label="K 線圖，標示現價、決策線與技術位；可用滾輪縮放、拖曳平移"></canvas>
         <div class="chart-tooltip" id="chartTooltip" hidden></div>
+      </div>
+      <p class="chart-help">滾輪／雙指縮放　·　拖曳／單指平移　·　聚焦圖表後可用 + − 方向鍵，0 重置</p>
+      <!-- A7：行動端固定資訊列。桌面端不顯示，量表在 ≤900px 才啟用。 -->
+      <div class="chart-infobar" id="chartInfoBar" hidden aria-live="polite">
+        <span class="cib-tag">選取</span>
+        <span class="cib-body" id="chartInfoBody">點一下圖表查看該根 K 線資訊</span>
       </div>
       <div class="chart-legend" id="chartLegend"></div>
     </section>
@@ -352,9 +501,160 @@
       <p class="disclaimer">本頁面所有價位與機率均為歷史資料統計結果，不保證未來表現，不構成投資建議。</p>
     </footer>
 
-  </div>
+  </div><!-- /#result -->
+
+  </div><!-- /#viewChart -->
+
+  <!-- ============ 檢視二：AI 選股 ============ -->
+  <div id="viewScreen" hidden>
+
+    <!-- 篩選條件 -->
+    <section class="card screen-form-card" aria-label="選股條件設定">
+      <header class="card-head">
+        <h2>篩選條件</h2>
+        <span class="badge badge-neutral" id="poolBadge">標的池 —</span>
+      </header>
+
+      <form id="screenForm" class="screen-form" autocomplete="off" novalidate>
+        <div class="sf-grid">
+          <label class="sf-field">
+            <span class="sf-k">市場</span>
+            <select id="fMarket" class="sf-input">
+              <option value="all">全部（美股 + 港股）</option>
+              <option value="us">美股</option>
+              <option value="hk">港股</option>
+            </select>
+          </label>
+
+          <label class="sf-field">
+            <span class="sf-k">技術評分 ≥</span>
+            <input id="fMinScore" class="sf-input" type="number" min="0" max="100" step="1" value="55" inputmode="numeric">
+          </label>
+
+          <label class="sf-field">
+            <span class="sf-k">距買區 ≤（ATR 倍數）</span>
+            <input id="fMaxDistAtr" class="sf-input" type="number" min="0" max="50" step="0.5" value="3" inputmode="decimal">
+          </label>
+
+          <label class="sf-field">
+            <span class="sf-k">股價 ≥</span>
+            <input id="fMinPrice" class="sf-input" type="number" min="0" step="0.5" value="1" inputmode="decimal">
+          </label>
+
+          <label class="sf-field">
+            <span class="sf-k">波動上限（ATR%）</span>
+            <input id="fMaxAtrPct" class="sf-input" type="number" min="0.1" max="100" step="0.1" value="12" inputmode="decimal">
+          </label>
+
+          <label class="sf-field">
+            <span class="sf-k">結果筆數上限</span>
+            <input id="fLimit" class="sf-input" type="number" min="1" max="200" step="1" value="30" inputmode="numeric">
+          </label>
+        </div>
+
+        <div class="sf-row">
+          <label class="sf-check">
+            <input type="checkbox" id="fRequirePred">
+            <span>僅保留「K 線區間預測可用」的標的（會明顯變慢）</span>
+          </label>
+        </div>
+
+        <div class="sf-actions">
+          <button type="submit" id="screenBtn" class="primary-btn" formnovalidate>
+            <span class="btn-label">開始篩選</span>
+            <span class="spinner" hidden></span>
+          </button>
+          <button type="button" id="screenReset" class="ghost-btn">恢復預設</button>
+          <button type="button" id="screenPicks" class="ghost-btn">載入每日清單</button>
+        </div>
+
+        <p class="hint-line" id="screenHint">
+          篩選是在本機伺服器即時計算：美股與港股共 <span id="poolCountHint">150+</span> 檔，約需 8–15 秒。條件放寬可得到更多結果。
+        </p>
+      </form>
+    </section>
+
+    <!-- 篩選結果 -->
+    <section class="card screen-result-card" id="screenResult" aria-label="篩選結果" hidden>
+      <header class="card-head">
+        <h2>篩選結果</h2>
+        <span class="badge badge-neutral" id="screenStatsBadge">—</span>
+      </header>
+
+      <div class="screen-stats" id="screenStats"></div>
+
+      <div class="screen-reasons" id="screenReasons" hidden></div>
+
+      <div class="screen-loading" id="screenLoading" hidden aria-live="polite">
+        <div class="skeleton-line w40"></div>
+        <div class="skeleton-line w70"></div>
+        <p class="loading-text" id="screenLoadingText">正在逐檔分析…</p>
+      </div>
+
+      <div class="screen-empty" id="screenEmpty" hidden>
+        <p class="se-title">沒有符合條件的標的</p>
+        <p class="se-body" id="screenEmptyBody"></p>
+        <div class="se-actions" id="screenEmptyActions"></div>
+      </div>
+
+      <div class="table-wrap" id="screenTableWrap" hidden>
+        <table class="screen-table">
+          <thead>
+            <tr>
+              <th class="st-sym">代碼 / 名稱</th>
+              <th class="num st-sort" data-sort="price">現價 <span class="sort-ind"></span></th>
+              <th class="num st-sort" data-sort="changePct">漲跌 <span class="sort-ind"></span></th>
+              <th class="num st-sort" data-sort="score">評分 <span class="sort-ind"></span></th>
+              <th class="num st-sort" data-sort="distAtr">距買區 <span class="sort-ind"></span></th>
+              <th class="num st-sort" data-sort="atrPct">波動 <span class="sort-ind"></span></th>
+              <th class="num st-sort" data-sort="rrRatio">盈虧比 <span class="sort-ind"></span></th>
+              <th class="st-verdict">技術面</th>
+              <th class="st-act"></th>
+            </tr>
+          </thead>
+          <tbody id="screenBody"></tbody>
+        </table>
+      </div>
+
+      <p class="screen-note" id="screenNote" hidden></p>
+    </section>
+
+    <!-- 錯誤 -->
+    <section id="screenError" class="error-card" hidden role="alert" aria-live="assertive">
+      <div class="error-head">
+        <span class="error-icon" aria-hidden="true">⚠️</span>
+        <strong id="screenErrorTitle">篩選失敗</strong>
+      </div>
+      <p id="screenErrorMessage" class="error-message"></p>
+      <p id="screenErrorHint" class="error-hint"></p>
+      <div id="screenErrorActions" class="error-actions"></div>
+    </section>
+
+    <!-- 排程說明 -->
+    <section class="card schedule-card" aria-label="每日清單產生方式">
+      <header class="card-head"><h2>每日清單怎麼產生</h2></header>
+      <p class="sc-body">
+        本服務不依賴背景排程。每次有人開啟本頁，系統會檢查「今日收盤後是否已產生清單」，
+        沒有就<strong>當場補跑一次</strong>並存檔；同一天後續訪問直接讀檔（毫秒級）。
+      </p>
+      <ul class="sc-list" id="scheduleInfo">
+        <li><span class="sc-k">收盤緩衝</span><span class="sc-v" id="scSettle">—</span></li>
+        <li><span class="sc-k">今日清單</span><span class="sc-v" id="scToday">—</span></li>
+        <li><span class="sc-k">歷史清單</span><span class="sc-v" id="scHistory">—</span></li>
+        <li><span class="sc-k">進程內定時</span><span class="sc-v" id="scCron">—</span></li>
+      </ul>
+      <p class="sc-body sc-why">
+        為什麼不用固定排程：免費方案閒置 15 分鐘會休眠，進程內的計時器到時不會執行，
+        醒來後時間已跳過。改用「訪問觸發 + 當日鎖」後，休眠再久，第一個訪問者也會把當日清單補上。
+      </p>
+    </section>
+
+  </div><!-- /#viewScreen -->
+
 </main>
 
+<script src="/common.js"></script>
 <script src="/app.js"></script>
+<script src="/screen.js"></script>
 </body>
 </html>

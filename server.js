@@ -7,6 +7,9 @@
  *   GET  /api/health                 健康檢查
  *   GET  /api/search?q=              代碼 / 名稱搜尋（自動完成）
  *   GET  /api/analyze?symbol=        完整分析（含買入區間、機率、回測）
+ *   GET  /api/kline?symbol=&range=   K 線序列（時間區間切換用）
+ *   GET  /api/screen?…               AI 選股：依條件即時篩選
+ *   GET  /api/picks[?run=1]          每日候選清單（惰性補跑）
  *   GET  /api/news?symbol=           相關新聞
  *   POST /api/notify                 發送 Telegram 通知
  *   GET  /api/config                 通知設定狀態
@@ -21,7 +24,14 @@ const url = require('url');
 
 const yahoo = require('./lib/datasource');
 const analyzer = require('./lib/analyzer');
+const forecast = require('./lib/forecast');
+const datasource = require('./lib/datasource');
 const telegram = require('./lib/telegram');
+const kline = require('./lib/kline');
+const screener = require('./lib/screener');
+const scheduler = require('./lib/scheduler');
+const pool = require('./lib/pool');
+const credibility = require('./lib/credibility');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -461,11 +471,182 @@ const server = http.createServer(async (req, res) => {
       if (!raw) return sendError(res, 400, 'EMPTY', '請輸入股票代碼或名稱', '例如 AAPL、0700.HK、騰訊');
       const resolved = await resolveSymbol(raw);
       const data = await analyzer.analyze(resolved.symbol);
+
+      /*
+       * FP（K 線區間預測）與既有分析並行取數，但**不共用序列**：
+       * FP 需要 10y 已復權序列，既有分析用 2y 未復權序列。
+       * 兩者互不干擾，AC-01 要求的 probabilities / backtest 逐位元相同
+       * 才得以成立（見 docs/K線預測與AI選股規格書_v1.1.md §2.4）。
+       *
+       * 以附帶方式（不是必要欄位）加入：FP 失敗時僅少一個卡片，
+       * 不影響既有分析結果的可用性。
+       */
+      try {
+        // analyzer 提供 snapshot.atrPct（ATR 佔現價百分比），作為
+        // judge() 在回測未回傳 meanSigma 時的備援基準
+        const atrPct = data?.snapshot?.atrPct;
+        data.pred = await forecast.buildPrediction(datasource, resolved.symbol, {
+          atrPct: typeof atrPct === 'number' ? atrPct : null,
+        });
+      } catch (e) {
+        // 保底：即使建構過程意外擲出，也回傳結構完整的 pred
+        data.pred = {
+          symbol: resolved.symbol,
+          status: 'error',
+          reason: `預測模組異常：${e.message}`,
+          horizons: {},
+          note: '此為歷史分位數推估的價格區間，非價格預測，不構成投資建議',
+        };
+      }
+
       if (resolved.assumed) data.assumedMarket = resolved.assumed;
       if (resolved.fuzzy) data.fuzzyMatchNote = '未找到完全相符的標的，已顯示最相近的結果，請確認是否正確。';
       if (resolved.candidates) data.candidates = resolved.candidates;
+
+      /*
+       * 統計可信度（取代方向機率，見 lib/credibility.js 的說明）。
+       *
+       * 這裡只用**已經算好的** pred 做加權評估，不重新取數、不重跑回測，
+       * 因此對 /api/analyze 的耗時影響可忽略（純計算，< 1ms）。
+       * 失敗時回傳 available:false，不影響主分析。
+       */
+      try {
+        data.predCredibility = credibility.assess(data.pred, data.meta?.price);
+      } catch (e) {
+        data.predCredibility = { available: false, reason: `可信度評估失敗：${e.message}` };
+      }
+
       data.ok = true;
       return sendJSON(res, 200, data);
+    }
+
+    /*
+     * K 線序列 — 時間區間切換
+     *
+     * 為什麼獨立於 /api/analyze：
+     *   analyze 只回 250 根（控制回應大小），但切換到 2y/5y 需要更長歷史。
+     *   若把 analyze 的切片放大，既有前端與 15 項 AC-01 斷言會全部受影響。
+     */
+    if (pathname === '/api/kline') {
+      const raw = (q.symbol || '').trim();
+      if (!raw) return sendError(res, 400, 'EMPTY', '請提供股票代碼', '例如 AAPL、0700.HK');
+
+      // range 先驗證，避免為了「非法區間」白跑一次上游取數
+      const norm = kline.normalizeRange(q.range);
+      if (!norm.ok) return sendError(res, 400, norm.code, norm.message, norm.hint);
+
+      const resolved = await resolveSymbol(raw);
+      const res1 = await kline.getSeries(datasource, resolved.symbol, q.range || null, null);
+      if (!res1.ok) return sendError(res, 404, res1.code, res1.message, res1.hint);
+
+      return sendJSON(res, 200, { ok: true, ...res1, requestedSymbol: raw });
+    }
+
+    /*
+     * AI 選股 — 即時篩選
+     *
+     * 全部條件走 URL query，由 screener.normalizeOptions 統一驗證。
+     * 參數錯誤一律 400 BAD_PARAMS，並把「哪一個欄位錯、錯在哪」寫在人話裡，
+     * 讓前端能直接顯示，而不是丟一句「請求失敗」。
+     */
+    if (pathname === '/api/screen') {
+      const norm = screener.normalizeOptions(q);
+      if (!norm.ok) {
+        return sendError(res, 400, norm.code, norm.message,
+          `可用參數：market（all/us/hk）、minScore、maxDistAtr、minPrice、minAvgVol、maxAtrPct、`
+          + `requirePred、limit（1-200）、sortBy（${[...screener.SORTABLE].join('/')}）、sortDir（asc/desc）`);
+      }
+
+      // 母體可限縮到單一市場，減少不必要的上游請求
+      const symbols = pool.byMarket(norm.opts.market);
+      const p = pool.summary();
+      if (!symbols.length) {
+        return sendJSON(res, 200, {
+          ok: true, opts: norm.opts, rows: [],
+          stats: { pool: 0, checked: 0, passed: 0, returned: 0, excluded: 0, failed: 0, excludeReasons: [], notes: ['此市場在標的池中沒有成員'] },
+          poolSummary: p,
+        });
+      }
+
+      const out = await screener.screen(
+        { analyzer, forecast, datasource, symbols },
+        q,
+        { concurrency: Number(process.env.SCREEN_CONCURRENCY) || screener.DEFAULT_CONCURRENCY }
+      );
+      if (!out.ok) {
+        return sendError(res, 400, out.error.code, out.error.message);
+      }
+      return sendJSON(res, 200, { ...out, poolSummary: p });
+    }
+
+    /*
+     * 每日候選清單 — 惰性補跑（lazy catch-up）
+     *
+     * 這個端點同時扮演三個角色（見 lib/scheduler.js）：
+     *   1. 一般訪問（預設）：今日已有資料就毫秒級回傳；今日尚無資料則
+     *      當場補跑一次（約 8–40 秒）。這正是「休眠再久，第一個訪問者
+     *      也會補上當日清單」的實作方式。
+     *   2. ?preview=1：只讀不跑。前端要「先問有沒有、再決定要不要等」時使用。
+     *   3. ?run=1：強制重跑（外部 cron 用）。若設定了 PICKS_TOKEN 則需帶 token。
+     */
+    if (pathname === '/api/picks') {
+      const force = q.run === '1' || q.force === '1';
+      const previewOnly = q.preview === '1';
+      const token = process.env.PICKS_TOKEN || '';
+      if (force && token && String(q.token || '') !== token) {
+        return sendError(res, 403, 'FORBIDDEN', '強制重跑需要有效的 token', '請在 query 帶上 token=…（伺服器端設定 PICKS_TOKEN）');
+      }
+
+      let out;
+      if (previewOnly && !force) {
+        // 純讀取：不觸發計算，只回報「今日有沒有、最近幾天有」
+        const cutoff = scheduler.lastSettledCutoff();
+        const key = scheduler.dateKey(cutoff);
+        const existing = scheduler.readDaily(key);
+        out = {
+          ran: false,
+          key,
+          reason: existing ? '今日已有資料' : '今日尚無資料（一般訪問會自動補跑）',
+          payload: existing,
+        };
+      } else {
+        out = await scheduler.maybeRun(
+          { analyzer, forecast, datasource, symbols: pool.byMarket('all') },
+          screener,
+          { force }
+        );
+      }
+
+      const payload = out.payload || null;
+      return sendJSON(res, 200, {
+        ok: true,
+        key: out.key,
+        ran: out.ran,
+        reason: out.reason,
+        generatedAt: payload ? payload.generatedAt : null,
+        cutoffUtc: payload ? payload.cutoffUtc : null,
+        durationMs: payload ? payload.durationMs : null,
+        opts: payload ? payload.opts : null,
+        rows: payload ? payload.rows : [],
+        stats: payload ? payload.stats : null,
+        history: scheduler.listRecent(10),
+        poolSummary: pool.summary(),
+        schedule: {
+          settleMinutes: scheduler.SETTLE_MINUTES,
+          inProcessCron: String(process.env.ENABLE_INPROCESS_CRON || '') === '1',
+          note: '本服務採「訪問觸發 + 當日鎖」補跑：休眠再久，第一個訪問者也會補上當日清單。',
+        },
+      });
+    }
+
+    /* 篩選條件中繼資料：讓前端不必硬編碼預設值 */
+    if (pathname === '/api/screen/meta') {
+      return sendJSON(res, 200, {
+        ok: true,
+        defaults: screener.DEFAULTS,
+        sortable: [...screener.SORTABLE].map((k) => ({ key: k, label: screener.SORTABLE_LABEL[k] || k })),
+        pool: pool.summary(),
+      });
     }
 
     if (pathname === '/api/news') {
@@ -529,7 +710,16 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  股票買入位與技術位分析系統`);
   console.log(`  服務已啟動： http://0.0.0.0:${PORT}`);
   console.log(`  Telegram 通知： ${telegram.isConfigured() ? '已設定' : '未設定（模擬模式）'}`);
+  const ps = pool.summary();
+  console.log(`  選股母體： ${ps.total} 檔（港股 ${ps.hk} / 美股 ${ps.us}）`);
   console.log(`  資料來源： Yahoo Finance\n`);
+
+  // L2 進程內定時（預設不啟用，見 lib/scheduler.js 的說明）
+  scheduler.startInterval(
+    { analyzer, forecast, datasource, symbols: pool.byMarket('all') },
+    screener,
+    30 * 60 * 1000
+  );
 });
 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));

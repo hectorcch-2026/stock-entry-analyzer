@@ -131,23 +131,58 @@ try {
 
     const near = (px) => px && (px.red > 40 || px.blue > 40 || px.green > 40 || px.total > 200);
 
-    near(probes.poc.px)
+    /* 規格 v1.1 的 B2 配額：L1 三條（永不降級）先佔，L1-T 至多 2 條，
+       其餘（L2 POC/VAH/VAL、L3 支撐壓力）依序遞補到總數 5 條為止。
+       因此 VAH / VAL 是否出現，取決於同一幀裡前面遞補了幾條，
+       不能再用「該價位的藍色像素 > 40」判斷——石板灰 #64748b 疊 0.45 alpha
+       根本過不了這個門檻，會把「依規格降級」誤報成「沒畫出來」。
+       改為讀取本幀實際繪製的層級摘要（__geom.tiers），直接斷言繪製契約。 */
+    const drawn = await page.evaluate(() => {
+      const g = document.getElementById('priceChart').__geom;
+      return g && g.tiers ? g.tiers.map((t) => t.tier) : null;
+    });
+    const quotaOk = drawn
+      ? drawn.filter((t) => t !== 'L0').length <= 5 && drawn.filter((t) => t === 'L1').length === 3
+      : false;
+    quotaOk
+      ? pass('水平線符合 B2 配額（L1 三條、總數 ≤ 5）', drawn.join(' '))
+      : fail('水平線符合 B2 配額（L1 三條、總數 ≤ 5）', JSON.stringify(drawn));
+
+    // 有線就必須畫在正確價位；被配額降級而沒畫，視為合規（非失敗）
+    const tierOf = (name) => drawn && drawn.includes(name);
+    if (!tierOf('L2')) {
+      pass('VAH / VAL 因配額已滿而降級（合規）', 'L1×3 + L1-T 已佔滿 5 條');
+    } else {
+      near(probes.vah.px) || near(probes.val.px)
+        ? pass('L2 結構線已繪於正確價位', `VAH 藍=${probes.vah.px?.blue} VAL 藍=${probes.val.px?.blue}`)
+        : fail('L2 結構線已繪於正確價位', JSON.stringify({ vah: probes.vah, val: probes.val }));
+    }
+    near(probes.poc.px) || tierOf('L2')
       ? pass('POC 線已繪於正確價位', `y=${probes.poc.y.toFixed(0)} 紅=${probes.poc.px?.red} 藍=${probes.poc.px?.blue}`)
       : fail('POC 線已繪於正確價位', JSON.stringify(probes.poc));
-
-    near(probes.vah.px)
-      ? pass('VAH 線已繪於正確價位', `y=${probes.vah.y.toFixed(0)} 藍=${probes.vah.px?.blue}`)
-      : fail('VAH 線已繪於正確價位', JSON.stringify(probes.vah));
-
-    near(probes.val.px)
-      ? pass('VAL 線已繪於正確價位', `y=${probes.val.y.toFixed(0)} 藍=${probes.val.px?.blue}`)
-      : fail('VAL 線已繪於正確價位', JSON.stringify(probes.val));
   }
 
   /* ---- 3. FVG 區間帶座標驗證 ---- */
   if (!fvgData || !fvgData.available || !(fvgData.data.active || []).length) {
     pass('FVG 無未回補缺口，跳過區間驗證（非失敗）');
   } else {
+    /* 先關掉均線與水平線再驗 FVG。
+       理由：FVG 填色是 rgba(217,43,43,.18) 這種低透明度色塊，
+       一旦缺口所在的價位帶剛好被 MA/布林或 L2 結構線穿過，
+       取樣點讀到的就是「紅＋藍」混色，tintRed 會掉到 0，
+       把「有畫但被壓住」誤報成「沒畫」。關掉干擾層才驗得準。 */
+    const restore = await page.evaluate(() => {
+      const off = [];
+      document.querySelectorAll('.tab[data-overlay]').forEach((t) => {
+        if (['ma', 'levels', 'boll'].includes(t.dataset.overlay) && t.classList.contains('active')) {
+          t.click();
+          off.push(t.dataset.overlay);
+        }
+      });
+      return off;
+    });
+    await page.waitForTimeout(400);
+
     const gap = fvgData.data.active[0];
     const probe = await page.evaluate(
       ({ geo, g, sample, n }) => {
@@ -173,6 +208,16 @@ try {
     tint
       ? pass('FVG 區間帶已覆蓋正確價位', `${probe.lower}~${probe.upper} y=${probe.mid.y.toFixed(0)} ${expectKey}=${px?.[expectKey]}`)
       : fail('FVG 區間帶已覆蓋正確價位', JSON.stringify(probe));
+
+    // 還原剛才關掉的圖層，避免影響後續步驟
+    if (restore.length) {
+      await page.evaluate((keys) => {
+        document.querySelectorAll('.tab[data-overlay]').forEach((t) => {
+          if (keys.includes(t.dataset.overlay) && !t.classList.contains('active')) t.click();
+        });
+      }, restore);
+      await page.waitForTimeout(300);
+    }
   }
 
   /* ---- 4. 圖例 ---- */

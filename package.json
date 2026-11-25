@@ -17,7 +17,15 @@
     "test:hidden": "node tests/hidden-visibility.mjs",
     "test:all": "node tests/notify-escape.cjs && node tests/hidden-visibility.mjs && node tests/adv-modules.mjs && node tests/chart-overlays.mjs && node tests/e2e-layout.mjs && node tests/e2e-flow.mjs && node tests/e2e-notify.mjs && node tests/e2e-pwa.mjs && node tests/e2e-ios-standalone.mjs",
     "test:adv": "node tests/adv-modules.mjs",
-    "test:chart": "node tests/chart-overlays.mjs"
+    "test:chart": "node tests/chart-overlays.mjs",
+    "test:forecast": "node tests/forecast-unit.cjs",
+    "test:gate": "node scripts/test-gate-negative.js",
+    "test:ac01": "node tests/ac01-regression.cjs",
+    "test:pred": "node tests/e2e-pred.mjs",
+    "test:v14": "node tests/e2e-v14-ui.mjs",
+    "test:detail": "node tests/e2e-detail.mjs",
+    "verify:intervals": "node scripts/verify-intervals.js",
+    "test:fp": "node tests/forecast-unit.cjs && node scripts/test-gate-negative.js && node scripts/verify-intervals.js"
   },
   "engines": {
     "node": ">=18"

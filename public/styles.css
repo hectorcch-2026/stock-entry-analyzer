@@ -437,6 +437,15 @@ body {
 
 /* ---------------- 圖表 ---------------- */
 .chart-card .card-head { margin-bottom: 10px; }
+
+/* 標題列：左標題、右模式切換。把「我在看哪一層」放到視線最上緣，
+   避免使用者先讀圖例再猜現在該看什麼。 */
+.chart-title-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex: 1 1 100%; min-width: 0; flex-wrap: wrap;
+}
+.chart-title-row h2 { flex: none; }
+
 .tab-group { display: flex; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 8px; border: 1px solid var(--border); flex-wrap: wrap; }
 .tab {
   font-size: 12.5px; font-family: inherit; color: var(--text-2);
@@ -445,6 +454,27 @@ body {
 }
 .tab:hover { color: var(--text); }
 .tab.active { background: #fff; color: var(--brand); font-weight: 600; box-shadow: 0 1px 3px rgba(16,24,40,.1); }
+
+/* 三層分析模式（對應框架的日線／1H·15M／5M）。
+   刻意不用 tab 外觀，避免與「顯示層切換」混淆——
+   模式是「我現在回答哪個問題」，圖層是「我打開哪些資料」。 */
+.mode-group {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--brand-soft); border: 1px solid #d6e2fd; border-radius: 999px;
+  flex: none;
+}
+.mode-btn {
+  font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--brand);
+  background: transparent; border: none; border-radius: 999px;
+  padding: 5px 13px; cursor: pointer; white-space: nowrap;
+  transition: background .16s, color .16s, box-shadow .16s;
+}
+.mode-btn:hover { background: rgba(29,78,216,.09); }
+.mode-btn.active {
+  background: var(--brand); color: #fff;
+  box-shadow: 0 1px 4px rgba(29,78,216,.35);
+}
+.mode-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .chart-wrap { position: relative; width: 100%; }
 #priceChart { display: block; width: 100%; height: 420px; cursor: crosshair; touch-action: pan-y; }
@@ -460,8 +490,34 @@ body {
   font-size: 12px; color: var(--text-2);
 }
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+/* L0-L3 層級圖例：略淡一階，讓「現價／決策線／目標」三組視覺上先成群 */
+.lg-tier { color: var(--text-2); }
+.lg-tier b { font-weight: 600; color: var(--text); }
 .lg-line { width: 16px; height: 3px; border-radius: 2px; flex: none; }
 .lg-dash { width: 16px; height: 0; border-top: 2px dashed currentColor; flex: none; }
+
+/* 行動端固定資訊列（A7）
+   手指點在圖上時，浮動 tooltip 會被指腹遮住，因此窄螢幕改用
+   「圖表正下方」的固定列顯示 OHLCV。桌面端不顯示（見響應式區塊）。 */
+.chart-infobar {
+  display: flex; align-items: baseline; gap: 9px;
+  margin-top: 9px; padding: 8px 11px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px; line-height: 1.5; color: var(--text-2);
+  min-height: 34px;
+}
+.cib-tag {
+  flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--brand); background: var(--brand-soft);
+  padding: 2px 7px; border-radius: 999px;
+}
+.cib-body {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  min-width: 0; word-break: break-word;
+}
+.cib-body .cib-up { color: var(--up); }
+.cib-body .cib-down { color: var(--down); }
 /* 區塊型圖例（成交量分佈、FVG 區間）：實心小方塊 + 可選邊框 */
 .lg-box {
   width: 14px; height: 10px; border-radius: 2px; flex: none;
@@ -594,6 +650,13 @@ body {
   .bd-note { margin-left: 102px; }
 }
 
+/* 資訊列只在窄螢幕出現（A7）
+   901px 以上由浮動 tooltip 承擔，這條固定列即使被 JS 打開也必須隱藏，
+   避免桌面端出現「圖上 hover、圖下又留一份」的重複資訊。 */
+@media (min-width: 901px) {
+  .chart-infobar { display: none !important; }
+}
+
 /* 手機 */
 @media (max-width: 640px) {
   body { font-size: 14.5px; }
@@ -623,11 +686,19 @@ body {
 
   .card { padding: 14px; }
   .card-head h2 { font-size: 14.5px; }
+
+  /* 主圖高度（AC-02）：375×667 下 plotH 必須 ≥260px。
+     plotH = H − padT(14) − padB(26) − volH − 8，其中 volH = max(44, 0.16H)。
+     解 H − 48 − 0.16H ≥ 260 得 H ≥ 367；取 372 留 2px 餘量（實際 264.5px）。
+     刻意不再用 300px——那會讓 13 條水平線只剩 204px，平均間距 17px，
+     比一行中文字還矮，標籤必然疊在一起。 */
+  #priceChart { height: 372px; }
+  .mode-btn { min-height: 34px; padding: 7px 12px; }
   .zone-price span:first-child, .zone-price span:nth-child(3) { font-size: 25px; }
   .gauge { width: 104px; height: 104px; }
   .gauge-svg { width: 104px; height: 104px; }
   .gauge-center strong { font-size: 21px; }
-  #priceChart { height: 300px; }
+  .tab { padding: 5px 9px; font-size: 12px; }
 
   .feature-grid { grid-template-columns: 1fr; gap: 10px; }
   .welcome-card { padding: 20px 16px; }
@@ -639,7 +710,6 @@ body {
   .bd-track { grid-area: track; }
   .bd-note { margin-left: 0; }
 
-  .tab { padding: 5px 9px; font-size: 12px; }
   .fib-list { grid-template-columns: repeat(2, 1fr); }
   .notify-row { flex-direction: column; align-items: stretch; }
   .ghost-btn { width: 100%; }
@@ -651,6 +721,11 @@ body {
   .quote-stats { grid-template-columns: 1fr 1fr; }
   .price { font-size: 25px; }
   .fib-list { grid-template-columns: 1fr; }
+  /* 三個模式鍵在 320px 下放不進一行：允許換行，並讓膠囊拉滿寬度，
+     否則預設 white-space:nowrap + 不收斂間距會撐出水平滾動。 */
+  .chart-title-row { gap: 8px; }
+  .mode-group { flex-wrap: wrap; justify-content: center; border-radius: 12px; }
+  .mode-btn { flex: 1 1 auto; padding: 7px 10px; }
 }
 
 /* ===================================================
@@ -849,6 +924,478 @@ body {
   .adv-mod { padding: 13px 13px 14px; }
 }
 
+/* ---------------------------------------------------
+   K 線區間預測（FP）卡片
+   ---------------------------------------------------
+   色彩決策（規格 §2.3 強制）：
+     - 不得使用 COLORS.zone（#1d4ed8 藍）—— 藍色在本專案已被
+       「建議買入區間」佔用，重用會讓使用者誤以為這是買區。
+     - 不得用紅(#d92b2b)／綠(#0f9d58) 承載機率或方向語義 ——
+       紅綠已綁定漲跌，而本卡片**刻意不輸出方向**。
+     - 因此改用中性石板色系（--fog*），並以「位置」（區間相對現價
+       的上下）而非顏色來表達資訊。寬度由長條長度呈現。
+   --------------------------------------------------- */
+.pred-card { --fog: #475467; --fog-soft: #f1f4f8; --fog-line: #d6dde7; }
+
+.badge-neutral {
+  background: var(--fog-soft); color: var(--fog);
+  border-color: var(--fog-line);
+}
+
+.pred-lede {
+  margin: 0 0 14px; font-size: 13px; color: var(--text-2); line-height: 1.65;
+}
+.pred-lede strong { color: var(--text); font-family: var(--mono); }
+
+/* 每個週期一列：標籤 + 區間長條 + 數值 */
+.pred-rows { display: flex; flex-direction: column; gap: 12px; margin-bottom: 4px; }
+
+.pred-row {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.pred-h {
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  font-family: var(--mono); white-space: nowrap;
+}
+
+/*
+ * 區間長條：以「今日收盤」為中心刻度，畫出 q10–q90 的相對位置。
+ * 之所以不用色塊填滿，是因為填色容易被讀成「機率密度」；
+ * 這裡只畫框線，避免暗示區間內部機率均勻。
+ */
+.pred-bar {
+  position: relative; height: 22px;
+  background: var(--fog-soft); border-radius: 6px; overflow: hidden;
+}
+.pred-span {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 12px; border: 1.5px solid var(--fog);
+  border-radius: 4px; background: rgba(71, 84, 103, .07);
+  min-width: 3px;
+}
+/* 今日收盤刻度：虛線，與區間框區隔，代表「原點」而非預測值 */
+.pred-base-tick {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1.5px dashed var(--text-3);
+}
+/* 中位數（q50）：實心短豎線 */
+.pred-median {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 2px; height: 16px; background: var(--fog); border-radius: 1px;
+}
+
+.pred-vals {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  color: var(--text); text-align: right; white-space: nowrap;
+}
+.pred-vals .pred-sep { color: var(--text-3); font-weight: 400; margin: 0 3px; }
+/* 相對現價的百分比：中性灰，不用紅綠 */
+.pred-vals .pred-delta { color: var(--text-3); font-weight: 500; font-size: 11.5px; margin-left: 6px; }
+
+.pred-meta { margin-top: 14px; }
+
+/* 不可用狀態：說明原因，不給數值 */
+.pred-unavailable { padding: 6px 0 2px; }
+.pred-unavailable-title {
+  margin: 0 0 6px; font-size: 13.5px; font-weight: 600; color: var(--text-2);
+}
+.pred-unavailable-reason {
+  margin: 0; font-size: 12.5px; color: var(--text-3); line-height: 1.7;
+}
+
+/* 強制的不確定性標示（規格 §8.4）：視覺上必須與數值區隔，不可淡化到看不見 */
+.pred-note {
+  margin: 12px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.7;
+  background: var(--fog-soft); border-left: 3px solid var(--fog-line);
+  border-radius: 0 8px 8px 0; padding: 9px 11px;
+}
+
+@media (max-width: 560px) {
+  .pred-row { grid-template-columns: 44px 1fr; gap: 8px 10px; }
+  .pred-vals { grid-column: 2; text-align: left; }
+}
+
+/* ===================================================
+   v1.4 新增：三頁導航 / 時間區間 / 縮放 / 可信度 / 選股頁
+   ---------------------------------------------------
+   色彩不變數的約定（沿用既有語義，勿在新增樣式中打破）：
+     --brand   藍 = 買入區間、決策線、主要動作
+     --up      紅 = 上漲（中式慣例）
+     --down    綠 = 下跌
+     --warn    橙 = 警告 / 未達門檻
+     新增的可信度卡片刻意使用石板灰（--fog*）+ 單一進度色，
+     不用紅綠承載「好壞」，避免被讀成看多／看空。
+   =================================================== */
+
+/* ---------------- 頂部導航 ---------------- */
+.main-nav {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 3px; border-radius: 999px; flex: 0 1 auto;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.main-nav::-webkit-scrollbar { display: none; }
+.nav-item {
+  display: inline-block; white-space: nowrap;
+  padding: 6px 14px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--text-2);
+  text-decoration: none; transition: background .15s, color .15s;
+}
+.nav-item:hover { background: #eef1f6; color: var(--text); }
+.nav-item.active {
+  background: var(--surface); color: var(--brand);
+  box-shadow: 0 1px 3px rgba(16,24,40,.10);
+}
+.nav-item.nav-detail { color: var(--brand); }
+.nav-item.nav-detail.active { background: var(--brand-soft); }
+
+/* ---------------- 詳情頁返回列 ---------------- */
+.detail-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 9px 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.back-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px; font-size: 13px; font-weight: 600; font-family: inherit;
+  color: var(--brand); background: var(--brand-soft);
+  border: 1px solid #c7d7fd; border-radius: 999px; cursor: pointer;
+}
+.back-btn:hover { background: #e2ebff; }
+.db-crumb { font-size: 12.5px; color: var(--text-3); }
+
+/* 詳情模式下隱藏「快速範例」，讓版面聚焦在單一標的 */
+body.detail-mode .chips { display: none; }
+
+/* ---------------- 圖表工具列（時間區間 + 縮放） ---------------- */
+.chart-tools {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px 14px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.range-group, .zoom-group {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 3px; border-radius: 999px;
+}
+.range-btn {
+  padding: 5px 11px; font-size: 12.5px; font-weight: 600; font-family: inherit;
+  color: var(--text-2); background: transparent; border: none;
+  border-radius: 999px; cursor: pointer; white-space: nowrap;
+  transition: background .14s, color .14s;
+}
+.range-btn:hover { background: #e8ecf2; color: var(--text); }
+.range-btn.active { background: var(--brand); color: #fff; }
+.range-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.icon-btn {
+  min-width: 28px; height: 26px; padding: 0 8px;
+  font-size: 13px; font-weight: 700; font-family: var(--mono); line-height: 1;
+  color: var(--text-2); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: border-color .14s, color .14s, background .14s;
+}
+.icon-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+.icon-btn:disabled { opacity: .38; cursor: not-allowed; }
+.icon-btn.wide { font-family: inherit; font-size: 12px; font-weight: 600; }
+
+.zoom-label, .zoom-range {
+  font-size: 11.5px; color: var(--text-3); font-family: var(--mono);
+  white-space: nowrap; padding: 0 6px;
+}
+.zoom-range { border-left: 1px solid var(--border); padding-left: 8px; }
+
+.range-status {
+  margin: 0 0 10px; font-size: 12px; line-height: 1.6;
+  padding: 5px 10px; border-radius: 7px;
+  background: var(--surface-2); border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+}
+.range-status.ok { background: #f0f9f4; border-left-color: #b7e5cf; color: #0b7a44; }
+.range-status.warn { background: var(--warn-soft); border-left-color: #f2ddb4; color: var(--warn); }
+.range-status.err { background: var(--up-soft); border-left-color: #f3c4c4; color: var(--up); }
+
+.chart-help {
+  margin: 8px 0 0; font-size: 11.5px; color: var(--text-3); text-align: center;
+}
+
+/* 拖拽中的游標與禁止選取，避免拖曳時選到文字 */
+#priceChart { touch-action: pan-y; cursor: crosshair; }
+#priceChart.dragging { cursor: grabbing; }
+#priceChart:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* ---------------- 統計可信度卡片 ---------------- */
+.cred-card { --fog: #475467; --fog-soft: #f1f4f8; --fog-line: #d6dde7; }
+
+.cred-head {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.cred-gauge { position: relative; width: 104px; height: 104px; flex: none; }
+.cred-gauge svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cred-track {
+  fill: none; stroke: #eef1f5; stroke-width: 9;
+}
+.cred-ring {
+  fill: none; stroke: var(--fog); stroke-width: 9; stroke-linecap: round;
+  transition: stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1), stroke .3s;
+}
+.cred-ring.grade-high { stroke: #0f9d58; }
+.cred-ring.grade-medium { stroke: #1d4ed8; }
+.cred-ring.grade-low { stroke: #b45309; }
+.cred-ring.grade-very-low { stroke: #d92b2b; }
+.cred-ring.grade-unknown { stroke: #98a2b3; }
+
+.cred-gauge-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1px;
+}
+.cred-gauge-center strong {
+  font-size: 26px; font-family: var(--mono); letter-spacing: -.5px; color: var(--text);
+  line-height: 1;
+}
+.cred-gauge-center span { font-size: 10.5px; color: var(--text-3); }
+
+.cred-lead { flex: 1 1 240px; min-width: 0; }
+.cred-label { margin: 0 0 6px; font-size: 16px; font-weight: 700; letter-spacing: .2px; }
+.cred-label.grade-high { color: #0b7a44; }
+.cred-label.grade-medium { color: var(--brand); }
+.cred-label.grade-low { color: var(--warn); }
+.cred-label.grade-very-low { color: var(--up); }
+.cred-label.grade-unknown { color: var(--text-3); }
+.cred-intro { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
+.cred-intro strong { color: var(--text); }
+
+.cred-components { display: grid; gap: 10px; margin-bottom: 18px; }
+.cred-comp {
+  background: var(--fog-soft); border-radius: 9px; padding: 10px 12px;
+}
+.cc-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.cc-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.cc-w { font-size: 11px; color: var(--text-3); }
+.cc-val { margin-left: auto; font-size: 13px; font-weight: 700; font-family: var(--mono); }
+.cc-val.good { color: #0b7a44; }
+.cc-val.mid { color: var(--brand); }
+.cc-val.poor { color: var(--warn); }
+.cc-val.na { color: var(--text-3); font-weight: 500; font-family: inherit; font-size: 12px; }
+.cc-track { height: 5px; background: #e2e7ee; border-radius: 3px; overflow: hidden; }
+.cc-fill { display: block; height: 100%; border-radius: 3px; transition: width .7s ease; }
+.cc-fill.good { background: #0f9d58; }
+.cc-fill.mid { background: #1d4ed8; }
+.cc-fill.poor { background: #b45309; }
+.cc-fill.na { background: transparent; }
+.cc-note { margin-top: 5px; font-size: 11.5px; color: var(--text-3); line-height: 1.55; }
+
+.cred-sub {
+  margin: 0 0 10px; font-size: 13.5px; letter-spacing: .2px;
+  padding-top: 14px; border-top: 1px solid var(--border);
+}
+.cred-position { display: flex; flex-direction: column; gap: 9px; }
+.cp-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-bottom: 3px; }
+.cp-title { font-size: 14px; font-weight: 700; }
+.cp-head.pos-up .cp-title { color: var(--up); }
+.cp-head.pos-down .cp-title { color: var(--down); }
+.cp-head.pos-flat .cp-title { color: var(--text); }
+.cp-sub { font-size: 11.5px; color: var(--text-3); }
+.cp-row {
+  display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px;
+}
+.cp-h { font-size: 12px; font-weight: 600; color: var(--text-2); font-family: var(--mono); }
+.cp-bar {
+  position: relative; height: 18px; background: var(--fog-soft);
+  border-radius: 5px; overflow: hidden;
+}
+.cp-zone {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 9px; background: rgba(71,84,103,.28); border-radius: 3px;
+}
+.cp-tick {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1.5px dashed var(--text-3);
+}
+.cp-txt { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+.cp-warn {
+  margin: 8px 0 0; font-size: 11.5px; color: var(--warn); line-height: 1.7;
+  background: var(--warn-soft); border-radius: 7px; padding: 8px 10px;
+}
+.cred-notes {
+  margin: 12px 0 0; padding-left: 20px;
+  font-size: 12px; color: var(--text-2); line-height: 1.75;
+}
+
+/* ---------------- AI 選股：篩選表單 ---------------- */
+.screen-form-card { margin-top: 14px; }
+.sf-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px; margin-bottom: 12px;
+}
+.sf-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.sf-k { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.sf-input {
+  width: 100%; padding: 9px 11px; font-size: 14px; font-family: inherit;
+  color: var(--text); background: var(--surface-2);
+  border: 1.5px solid var(--border-strong); border-radius: var(--radius-sm);
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.sf-input:focus {
+  outline: none; background: #fff;
+  border-color: var(--brand); box-shadow: 0 0 0 3px rgba(29,78,216,.13);
+}
+.sf-input.invalid { border-color: var(--up); box-shadow: 0 0 0 3px rgba(217,43,43,.12); }
+select.sf-input { cursor: pointer; }
+
+.sf-row { margin-bottom: 12px; }
+.sf-check {
+  display: inline-flex; align-items: flex-start; gap: 8px;
+  font-size: 12.5px; color: var(--text-2); cursor: pointer; line-height: 1.55;
+}
+.sf-check input { margin-top: 2px; flex: none; width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer; }
+
+.sf-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 4px; }
+
+/* ---------------- AI 選股：結果 ---------------- */
+.screen-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 12px;
+}
+.ss-item {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 4px 10px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 11.5px;
+}
+.ss-k { color: var(--text-3); }
+.ss-v { font-weight: 700; color: var(--text); font-family: var(--mono); }
+
+.screen-reasons { margin-bottom: 12px; }
+.sr-title { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.sr-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.sr-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; font-size: 11.5px; color: var(--text-2);
+  background: var(--warn-soft); border: 1px solid #f2ddb4; border-radius: 999px;
+}
+.sr-c {
+  font-weight: 700; font-family: var(--mono); color: var(--warn);
+  background: #fff; border-radius: 999px; padding: 0 5px; min-width: 18px; text-align: center;
+}
+
+.screen-loading { padding: 8px 0 4px; }
+
+.screen-empty {
+  padding: 20px 16px; text-align: center;
+  background: var(--surface-2); border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.se-title { margin: 0 0 7px; font-size: 14.5px; font-weight: 700; color: var(--text-2); }
+.se-body { margin: 0 0 13px; font-size: 12.5px; color: var(--text-3); line-height: 1.7; }
+.se-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+/* 結果表格 */
+.screen-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+.screen-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 8px 9px; font-size: 11.5px; font-weight: 600;
+  color: var(--text-3); text-align: left; white-space: nowrap;
+  background: var(--surface-2); border-bottom: 1.5px solid var(--border);
+}
+.screen-table thead th.num { text-align: right; }
+.screen-table th.st-sort { cursor: pointer; user-select: none; }
+.screen-table th.st-sort:hover { color: var(--brand); }
+.screen-table th.st-sort.sorted { color: var(--brand); font-weight: 700; }
+.sort-ind { font-size: 9px; margin-left: 2px; }
+
+.screen-table tbody td {
+  padding: 9px; border-bottom: 1px solid var(--border); vertical-align: middle;
+}
+.screen-table tbody tr { cursor: pointer; transition: background .12s; }
+.screen-table tbody tr:hover { background: var(--brand-soft); }
+.screen-table tbody tr:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.screen-table td.num { text-align: right; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+
+.st-sym { display: flex; flex-direction: column; gap: 1px; min-width: 150px; }
+.st-code { font-weight: 700; font-size: 13px; font-family: var(--mono); }
+.st-name {
+  font-size: 11.5px; color: var(--text-3);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.st-cur { font-size: 10.5px; color: var(--text-3); }
+
+.st-score {
+  display: inline-block; min-width: 30px; padding: 2px 7px;
+  border-radius: 6px; font-weight: 700; text-align: center;
+}
+.sc-high { background: #e9f8f1; color: #0b7a44; }
+.sc-mid { background: var(--brand-soft); color: var(--brand); }
+.sc-low { background: var(--surface-2); color: var(--text-2); }
+
+/* 距買區：<=0 表示已進區間，用底色標出（不用紅綠，避免與漲跌混淆） */
+.screen-table td.in-zone { background: #eef6ff; color: #185fa5; font-weight: 700; }
+.screen-table td.near { color: var(--brand); font-weight: 600; }
+
+.verdict-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.vp-pos { background: var(--up-soft); color: var(--up); }
+.vp-neg { background: var(--down-soft); color: #0b7a44; }
+.vp-neu { background: var(--surface-2); color: var(--text-2); }
+
+.st-act { text-align: right; }
+.row-btn {
+  padding: 5px 11px; font-size: 12px; font-weight: 600; font-family: inherit;
+  color: var(--brand); background: var(--brand-soft);
+  border: 1px solid #c7d7fd; border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.row-btn:hover { background: #e2ebff; }
+
+.screen-note {
+  margin: 12px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.7;
+  background: var(--surface-2); border-radius: 7px; padding: 9px 11px;
+}
+
+/* ---------------- 排程說明 ---------------- */
+.sc-body { margin: 0 0 11px; font-size: 12.5px; color: var(--text-2); line-height: 1.75; }
+.sc-body strong { color: var(--text); }
+.sc-why { margin: 11px 0 0; padding-top: 11px; border-top: 1px solid var(--border); color: var(--text-3); font-size: 12px; }
+.sc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.sc-list li { display: flex; gap: 10px; font-size: 12.5px; align-items: baseline; }
+.sc-k { flex: none; width: 88px; color: var(--text-3); }
+.sc-v { color: var(--text-2); font-family: var(--mono); font-size: 12px; word-break: break-all; }
+
+/* ---------------- 響應式 ---------------- */
+@media (max-width: 900px) {
+  .topbar-inner { flex-wrap: wrap; row-gap: 8px; }
+  /* 導航在窄螢幕獨佔一列，可橫向滑動 */
+  .main-nav { order: 3; width: 100%; justify-content: flex-start; }
+  .topbar-meta { margin-left: auto; }
+}
+
+@media (max-width: 640px) {
+  .chart-tools { gap: 8px; }
+  .range-group, .zoom-group { width: 100%; justify-content: flex-start; }
+  .zoom-label { width: 100%; padding: 3px 2px 0; }
+  .zoom-range { border-left: none; padding-left: 2px; }
+  .cred-head { gap: 13px; }
+  .cred-gauge { width: 88px; height: 88px; }
+  .cred-gauge-center strong { font-size: 22px; }
+  .cp-row { grid-template-columns: 40px 1fr; row-gap: 3px; }
+  .cp-txt { grid-column: 2; }
+  .sf-actions .primary-btn { flex: 1 1 100%; }
+  .sf-actions .ghost-btn { flex: 1 1 auto; }
+  .detail-bar { flex-wrap: wrap; }
+  .se-actions .err-btn { flex: 1 1 100%; }
+}
+
+@media (max-width: 380px) {
+  .nav-item { padding: 5px 10px; font-size: 12px; }
+  .range-btn { padding: 5px 8px; font-size: 11.5px; }
+}
+
 /* 深色系統偏好（降低不適） */
 @media (prefers-color-scheme: dark) {
   /* 保留明亮主題以確保圖表對比一致，僅微調背景 */
@@ -861,6 +1408,7 @@ body {
 
 /* 列印 */
 @media print {
-  .topbar, .search-card, .tab-group, .notify-card, .chips { display: none; }
+  .topbar, .search-card, .tab-group, .notify-card, .chips,
+  .main-nav, .chart-tools, .chart-help, .detail-bar, .screen-form-card { display: none; }
   .card { box-shadow: none; break-inside: avoid; }
 }

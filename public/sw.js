@@ -25,7 +25,10 @@
 //         否則舊用戶的 Stale-While-Revalidate 會先回舊檔案。
 // v1.0.3：把 VRVP 的 POC/VAH/VAL 與 FVG 區間帶疊加到互動 K 線圖，
 //         同樣動到 index.html / app.js / styles.css，需再升版。
-const VERSION = 'v1.0.3';
+// v1.0.4：圖表呈現規格書 v1.1 落地——L0 現價基準線、L1/L1-T/L2/L3
+//         四層視覺層級與 5 條配額、Y 軸視口裁切＋邊緣箭頭、三模式切換、
+//         行動端固定資訊列。index.html / app.js / styles.css 全改，必須升版。
+const VERSION = 'v1.0.4';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

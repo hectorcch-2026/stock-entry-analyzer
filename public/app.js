@@ -15,6 +15,23 @@
     suggestTimer: null,
     suggestIndex: -1,
     suggestItems: [],
+    /**
+     * 時間區間切換的額外序列。
+     *
+     * null 表示「用 /api/analyze 附帶的 250 根」（預設，與既有行為完全一致）。
+     * 只有使用者主動切到 2y/5y 時才會去 /api/kline 取更長的歷史，
+     * 因此預設路徑不會多一次請求，也不會動到 AC-01 鎖定的 250 根契約。
+     */
+    kline: null,
+    klineRange: null,
+    klineLoading: false,
+    /**
+     * 視窗（縮放 / 平移）。
+     *
+     * start 是「可見區間在完整序列中的起始索引」，count 是可見根數。
+     * count 為 null 表示顯示全部。預設全部 → 與舊行為逐位元相同。
+     */
+    view: { start: 0, count: null },
   };
 
   /* ==================== 工具 ==================== */
@@ -385,8 +402,20 @@
         clearInterval(timer);
         endLoading();
         state.data = data;
+        // 換標的必須重置區間與視窗：5y 序列是上一檔的，留著會畫錯股價
+        state.kline = null;
+        state.klineRange = null;
+        state.klineLoading = false;
+        state.view = { start: 0, count: null };
+        setRangeActive('1y');
+        setRangeStatus('');
         if (data.assumedMarket === 'HK') {
           $('symbolInput').value = data.meta.symbol;
+        }
+        // 詳情頁的網址要跟著更新，否則重新整理會回到上一檔
+        if (document.body.classList.contains('detail-mode') && data.meta.symbol) {
+          var want = '#/detail/' + encodeURIComponent(data.meta.symbol);
+          if (location.hash !== want) history.replaceState(null, '', '#' + want.slice(1));
         }
         render(data);
         setStatus('已更新', 'ok');
@@ -527,6 +556,13 @@
       : '—';
     $('valEdge').className = 'zl-v ' + (p.edge20 > 0 ? 'pos' : p.edge20 < 0 ? 'neg' : '');
 
+    // --- K 線區間預測（FP）---
+    // 獨立卡片、獨立母體，與上方機率區塊無換算關係（規格 §2.4 FP-0）
+    renderPred(d);
+
+    // --- 統計可信度 + 區間位置（取代方向機率，A-31）---
+    renderCredibility(d);
+
     // --- 技術位表 ---
     var rows = [];
     d.levels.supports.forEach(function (s, i) {
@@ -655,6 +691,240 @@
       + '<div class="marker m-stop" style="left:' + st + '%"></div>'
       + '<div class="marker m-target" style="left:' + tg + '%"></div>';
     $('zoneVisual').innerHTML = html;
+  }
+
+  /**
+   * 渲染 K 線區間預測卡片（FP，路徑 A）
+   *
+   * 三個狀態必須明確區分，不可混為一談（否則使用者會把
+   * 「今天沒有預測」誤讀成「預測結果是 0」）：
+   *   ok / partial  → 顯示區間
+   *   adj_unavailable / insufficient / unavailable → 顯示原因，不給任何數值
+   *
+   * 設計約束（規格 §2.3 / §8.4）：
+   *   - 絕不使用 COLORS.zone 藍，避免與「建議買入區間」混淆
+   *   - 絕不用紅綠承載方向或機率（本卡片不輸出方向）
+   *   - 不確定性說明為必要元素，不可隱藏
+   */
+  function renderPred(d) {
+    var p = d.pred;
+    var card = $('predCard');
+    if (!p) { card.hidden = true; return; }
+    card.hidden = false;
+
+    var badge = $('predBadge');
+    var noBody = $('predBody');
+    var noBox = $('predUnavailable');
+    var cur = d.meta.currency || '';
+
+    var OK = p.status === 'ok' || p.status === 'partial';
+
+    if (!OK) {
+      noBody.hidden = true;
+      noBox.hidden = false;
+      var titles = {
+        adj_unavailable: '此標的無法提供可靠預測',
+        insufficient: '資料不足，無法產生預測',
+        unavailable: '暫時無法取得預測資料',
+        error: '預測模組發生異常',
+      };
+      $('predUnavailableTitle').textContent = titles[p.status] || '無法產生預測';
+      $('predUnavailableReason').textContent = p.reason || '';
+      badge.textContent = '未提供';
+      badge.className = 'badge badge-neutral';
+      return;
+    }
+
+    noBox.hidden = true;
+    noBody.hidden = false;
+
+    var base = p.price != null ? p.price : d.meta.price;
+    $('predBase').textContent = fmt(base) + ' ' + cur;
+
+    // --- 各週期區間 ---
+    // 長條的比例尺：取所有週期的最寬區間，讓三個週期可互相比較寬窄。
+    // 這比「每個週期各自滿版」更能傳達「越遠越不確定」的直覺。
+    var hs = [5, 10, 20].filter(function (h) { return p.horizons[h] && p.horizons[h].status === 'ok'; });
+    var maxSpread = 0;
+    hs.forEach(function (h) {
+      var o = p.horizons[h];
+      if (o.q10 != null && o.q90 != null) maxSpread = Math.max(maxSpread, (o.q90 - o.q10) / base);
+    });
+
+    var labels = { 5: '5 日', 10: '10 日', 20: '20 日' };
+    var html = '';
+
+    hs.forEach(function (h) {
+      var o = p.horizons[h];
+      var lo = o.q10, hi = o.q90, mid = o.q50;
+
+      // 位置：以 [最寬區間] 為畫布，今日收盤置中對齊，
+      // 這樣「上偏」與「下偏」可直接由視覺判斷，無須讀數字
+      var spread = maxSpread > 0 ? maxSpread : 0.01;
+      var half = spread / 2;
+      // 相對現價的偏移比例（-1..1），再映射到 0..100%
+      var toPct = function (v) {
+        var rel = (v - base) / base;
+        return Math.max(0, Math.min(100, 50 + (rel / half) * 50));
+      };
+      var l = toPct(lo), u = toPct(hi), md = toPct(mid);
+
+      var dLo = ((lo - base) / base) * 100;
+      var dHi = ((hi - base) / base) * 100;
+
+      html += '<div class="pred-row">'
+        + '<span class="pred-h">' + labels[h] + '</span>'
+        + '<div class="pred-bar">'
+        + '<div class="pred-span" style="left:' + l + '%;width:' + Math.max(1.5, u - l) + '%"></div>'
+        + '<div class="pred-median" style="left:' + md + '%"></div>'
+        + '<div class="pred-base-tick" style="left:50%"></div>'
+        + '</div>'
+        + '<span class="pred-vals">' + fmt(lo) + '<span class="pred-sep">–</span>' + fmt(hi)
+        + '<span class="pred-delta">' + (dLo >= 0 ? '+' : '') + dLo.toFixed(1) + '% / '
+        + (dHi >= 0 ? '+' : '') + dHi.toFixed(1) + '%</span></span>'
+        + '</div>';
+    });
+
+    $('predRows').innerHTML = html || '<p class="pred-unavailable-reason">無可用的週期資料</p>';
+
+    // --- 中繼資訊 ---
+    $('predAsOf').textContent = p.asOf || '—';
+    var adjText = { 'yahoo-adjclose': '已復權（Yahoo adjclose）', 'qfq-native': '已復權（前復權原始資料）' };
+    $('predAdj').textContent = adjText[p.adj] || '未復權';
+    $('predQuality').textContent = ({ high: '良好', medium: '普通', low: '偏低' })[p.quality] || '—';
+
+    // PICP：只在回測確實執行過時顯示，避免暗示未驗證的模型也「有校準」
+    var picpEl = $('predPicp');
+    if (p.backtest && p.backtest.status === 'ok' && p.backtest.horizons) {
+      var parts = [];
+      [5, 10, 20].forEach(function (h) {
+        var b = p.backtest.horizons[h];
+        if (b && b.status === 'ok' && b.picp != null) parts.push('h' + h + ' ' + (b.picp * 100).toFixed(1) + '%');
+      });
+      picpEl.textContent = parts.length ? parts.join('、') : '—';
+      // 未通過門檻時必須在徽章上明示，不能只顯示好看的數字
+      if (p.backtest.pass === false) {
+        badge.textContent = '區間偏窄或偏寬';
+        badge.className = 'badge low';
+      } else {
+        badge.textContent = '80% 區間';
+        badge.className = 'badge badge-neutral';
+      }
+    } else {
+      picpEl.textContent = '未執行';
+      badge.textContent = '80% 區間';
+      badge.className = 'badge badge-neutral';
+    }
+
+    $('predNote').textContent = '⚠️ ' + (p.note || '此為歷史分位數推估的價格區間，非價格預測，不構成投資建議')
+      + '。區間寬度隨個股波動率不同，「較寬」代表波動較大，不代表較不準確。'
+      + '本卡片與上方「建議買入區間」採用不同資料母體，數值不可互相換算。';
+  }
+
+  /**
+   * 統計可信度 + 區間位置（取代「方向機率」，對應 A-31 裁決）
+   *
+   * 三個必須說清楚的地方，少一個就會被誤讀成投資建議：
+   *   1. 可信度衡量的是「區間估計品質」，不是「會不會漲」
+   *   2. 位置描述（重心偏上／對稱／偏下）是幾何量，不是機率
+   *   3. 未通過驗收門檻時必須明說，不能只挑好看的數字顯示
+   */
+  function renderCredibility(d) {
+    var card = $('credCard');
+    if (!card) return;
+    var c = d.predCredibility;
+    if (!c) { card.hidden = true; return; }
+    card.hidden = false;
+
+    var badge = $('credBadge');
+    var body = $('credBody');
+    var empty = $('credUnavailable');
+
+    if (!c.available) {
+      body.hidden = true;
+      empty.hidden = false;
+      $('credUnavailableReason').textContent = c.reason || '此標的的區間預測不可用，因此無法評估可信度。';
+      badge.textContent = '未提供';
+      badge.className = 'badge badge-neutral';
+      return;
+    }
+
+    empty.hidden = true;
+    body.hidden = false;
+
+    // --- 分數環 ---
+    var score = c.score == null ? 0 : c.score;
+    var ring = $('credRing');
+    var C = 2 * Math.PI * 42;
+    if (ring) {
+      ring.style.strokeDasharray = C;
+      ring.setAttribute('class', 'cred-ring grade-' + (c.grade || 'unknown'));
+      // 先設滿再延遲歸位，讓填色有動畫（避免一進場就是終值）
+      ring.style.strokeDashoffset = C;
+      setTimeout(function () { ring.style.strokeDashoffset = C * (1 - score / 100); }, 60);
+    }
+    var scoreEl = $('credScore');
+    if (scoreEl) scoreEl.textContent = score == null ? '—' : String(score);
+    var labelEl = $('credLabel');
+    if (labelEl) {
+      labelEl.textContent = c.label || '—';
+      labelEl.className = 'cred-label grade-' + (c.grade || 'unknown');
+    }
+    badge.textContent = c.backtestPass === false ? '區間未達驗收門檻' : (c.grade === 'high' ? '可信度高' : c.grade === 'medium' ? '可信度中等' : '可信度偏低');
+    badge.className = 'badge ' + (c.backtestPass === false ? 'low' : c.grade === 'high' ? 'high' : c.grade === 'medium' ? 'badge-neutral' : 'low');
+
+    // --- 三個組成 ---
+    var comps = c.components || [];
+    $('credComponents').innerHTML = comps.map(function (p) {
+      var v = p.score == null ? null : p.score;
+      var w = Math.round((p.weight || 0) * 100);
+      var cls = v == null ? 'na' : v >= 75 ? 'good' : v >= 55 ? 'mid' : 'poor';
+      return '<div class="cred-comp">'
+        + '<div class="cc-head">'
+        + '<span class="cc-name">' + esc(p.label) + '</span>'
+        + '<span class="cc-w">權重 ' + w + '%</span>'
+        + '<span class="cc-val ' + cls + '">' + (v == null ? '不適用' : v) + '</span>'
+        + '</div>'
+        + '<div class="cc-track"><span class="cc-fill ' + cls + '" style="width:' + (v == null ? 0 : v) + '%"></span></div>'
+        + '<div class="cc-note">' + esc(p.note || '') + '</div>'
+        + '</div>';
+    }).join('');
+
+    // --- 位置描述（不是方向預測）---
+    var pos = c.position || {};
+    var posBox = $('credPosition');
+    if (pos.available) {
+      var keyCls = pos.key === 'upper' ? 'pos-up' : pos.key === 'lower' ? 'pos-down' : 'pos-flat';
+      var rowsHtml = '';
+      [5, 10, 20].forEach(function (h) {
+        var o = pos.detail && pos.detail[h];
+        if (!o) return;
+        rowsHtml += '<div class="cp-row">'
+          + '<span class="cp-h">' + h + ' 日</span>'
+          + '<span class="cp-bar">'
+          + '<span class="cp-zone" style="left:' + (50 - o.shareAbove * 50) + '%;width:' + (o.shareAbove * 100) + '%"></span>'
+          + '<span class="cp-tick" style="left:50%"></span>'
+          + '</span>'
+          + '<span class="cp-txt">' + esc(o.label) + '</span>'
+          + '</div>';
+      });
+      posBox.innerHTML = '<div class="cp-head ' + keyCls + '">'
+        + '<span class="cp-title">' + esc(pos.label || '—') + '</span>'
+        + '<span class="cp-sub">' + (pos.shareAbove != null ? '區間內 ' + (pos.shareAbove * 100).toFixed(0) + '% 的價位高於現價' : '') + '</span>'
+        + '</div>'
+        + rowsHtml
+        + '<p class="cp-warn">⚠️ ' + esc(String(pos.explain || '').replace(/\*\*/g, '')) + '</p>';
+    } else {
+      posBox.innerHTML = '<p class="cp-warn">區間資料不足，無法描述位置。</p>';
+    }
+
+    // --- 說明 ---
+    var notes = (c.notes || []).slice();
+    $('credNotes').innerHTML = notes.length
+      ? notes.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('')
+      : '';
+    $('credNotes').hidden = notes.length === 0;
+    $('credDisclaimer').textContent = '⚠️ ' + (c.disclaimer || '');
   }
 
   function renderRanges(d) {
@@ -953,6 +1223,17 @@
     vpBarVA: 'rgba(29,78,216,.30)',
     vpBarPOC: 'rgba(217,43,43,.55)',
     poc: '#d92b2b', vah: '#1d4ed8', val: '#64748b',
+    /**
+     * 五級視覺層級（規格書 B1）。
+     * 刻意不再用顏色承載「這是什麼線」——顏色已語義飽和（up/resistance
+     * 同為 #d92b2b，down/support 同為 #0f9d58）。層級改由線寬與線型區分，
+     * 顏色只保留少量輔助辨識。
+     */
+    l0: '#101828',   // 現價：中性近黑，不與漲跌紅綠衝突
+    l1: '#1d4ed8',   // 決策線：藍（進場上下緣、止損）
+    l1t: '#7c3aed',  // 目標線：紫，與決策線區隔
+    l2: '#64748b',   // 結構線：石板灰
+    l3: '#94a3b8',   // 參考線：淡灰
     // FVG：看漲用紅（偏多）、看跌用綠（偏空），符合紅漲綠跌慣例
     // 透明度調高到 .18：.13 在白底上幾乎看不出來（實測取樣 alpha 只有 10 幾），
     // 但又不至於濃到蓋住 K 線實體。
@@ -976,61 +1257,117 @@
   function drawChart() {
     var d = state.data;
     if (!d) return;
-    var series = d.series.daily;
-    if (!series || series.length < 2) return;
+
+    /**
+     * 序列來源：預設 `d.series.daily`（250 根，既有行為）；
+     * 使用者切換時間區間後改用 `state.kline.candles`（更長）。
+     * 兩者欄位結構相同（t/o/h/l/c/v），因此下游完全不必分支。
+     */
+    var full = (state.kline && state.kline.candles && state.kline.candles.length)
+      ? state.kline.candles
+      : d.series.daily;
+    if (!full || full.length < 2) return;
+
+    /**
+     * 視窗切片（縮放 / 平移）。
+     *
+     * 原本這裡直接畫全部 250 根。加上縮放後必須只畫「可見區間」，
+     * 否則放大時每根寬度不變，只是把後面的 K 線擠出畫布外。
+     *
+     * 關鍵：count 為 null 時 start=0、count=full.length，切片就是整個陣列
+     * （slice 會回傳新陣列但內容與順序完全相同），所以預設路徑的
+     * 座標計算與舊版逐位元一致 —— AC-06 與圖表疊加測試不受影響。
+     */
+    var total = full.length;
+    var viewCount = state.view.count == null ? total : Math.max(10, Math.min(total, state.view.count));
+    var viewStart = Math.max(0, Math.min(total - viewCount, state.view.start || 0));
+    state.view.start = viewStart;
+    state.view.count = viewCount === total ? null : viewCount;
+    var series = viewStart === 0 && viewCount === total ? full : full.slice(viewStart, viewStart + viewCount);
+    // 供 FVG 等「以絕對索引定位」的圖層換算位置
+    var absOffset = viewStart;
 
     var c = setupCanvas();
     var ctx = c.ctx, W = c.w, H = c.h;
     ctx.clearRect(0, 0, W, H);
 
     var showVol = state.overlays.vol;
-    var padL = 8, padR = 62, padT = 14, padB = 26;
+    /**
+     * A4：padR 依實際價格字元數動態計算。
+     * 固定 62px 對「1234.56」這種較長格式偏窄，右緣刻度會被截掉。
+     * 這裡以最大可能刻度值估字元數，下限仍為 62 以免版面跳動。
+     */
+    var sampleTxt = fmtPrice(hiEstimate(series));
+    var padR = Math.max(62, Math.round(sampleTxt.length * 6.6) + 22);
+    var padL = 8, padT = 14, padB = 26;
     var volH = showVol ? Math.max(44, H * 0.16) : 0;
     var plotH = H - padT - padB - volH - (showVol ? 8 : 0);
     var plotW = W - padL - padR;
 
     // --- 計算數列 ---
-    var closes = series.map(function (x) { return x.c; });
+    /**
+     * 均線與布林必須在**完整序列**上計算，再切出可見區間。
+     *
+     * 若只在可見區間上算，放大到最後 60 根時 MA60 的起點會落在陣列開頭，
+     * 前 59 根沒有值（圖上左半段突然沒有均線），而且數值與未縮放時不同
+     * ——同一根 K 線的 MA20 不該因為縮放而改變。
+     */
+    var closes = full.map(function (x) { return x.c; });
     var maDefs = [{ p: 5, color: COLORS.ma5 }, { p: 10, color: COLORS.ma10 }, { p: 20, color: COLORS.ma20 }, { p: 60, color: COLORS.ma60 }];
-    var maSeries = maDefs.map(function (m) { return { p: m.p, color: m.color, data: sma(closes, m.p) }; });
-    var bollData = state.overlays.boll ? bollinger(closes, 20, 2) : null;
+    var maFull = maDefs.map(function (m) { return { p: m.p, color: m.color, data: sma(closes, m.p) }; });
+    var bollFull = state.overlays.boll ? bollinger(closes, 20, 2) : null;
 
-    // --- Y 軸範圍 ---
-    var vis = series.map(function (x) { return { h: x.h, l: x.l }; });
-    var lo = Math.min.apply(null, vis.map(function (x) { return x.l; }));
-    var hi = Math.max.apply(null, vis.map(function (x) { return x.h; }));
-    var pool = [];
-    if (state.overlays.ma) maSeries.forEach(function (m) { m.data.forEach(function (v) { if (v != null) pool.push(v); }); });
-    if (bollData) { bollData.upper.concat(bollData.lower).forEach(function (v) { if (v != null) pool.push(v); }); }
-    d.levels.supports.forEach(function (s) { pool.push(s.price); });
-    d.levels.resistances.forEach(function (s) { pool.push(s.price); });
-    pool.push(d.buyZone.lower, d.buyZone.upper);
+    var win = function (arr) {
+      if (!arr) return arr;
+      return (viewStart === 0 && viewCount === total) ? arr : arr.slice(viewStart, viewStart + viewCount);
+    };
+    var maSeries = maFull.map(function (m) { return { p: m.p, color: m.color, data: win(m.data) }; });
+    var bollData = bollFull
+      ? { mid: win(bollFull.mid), upper: win(bollFull.upper), lower: win(bollFull.lower) }
+      : null;
+
+    // --- Y 軸範圍（A6：視口裁切） ---
+    /**
+     * 規格書 A6 的核心目的：不讓遠端技術位把 K 線壓成扁平帶。
+     *
+     * 舊做法把所有技術位（支撐、壓力、POC/VAH/VAL、買區、FVG）併入
+     * lo/hi 計算。只要有一條半年前的支撐位，K 線實體就會被壓到只剩
+     * 幾個像素──這是「圖表看不懂」的頭號成因，比配色問題嚴重得多。
+     *
+     * 新做法：lo/hi 只由「實際繪製的 K 線」高低點決定，再向外留 5%。
+     * 超出視口的決策線不壓縮座標，改用邊緣箭頭提示（見 drawEdgeMarkers）。
+     *
+     * 註：規格書寫「近 N 根，N = min(可見根數, 120)」。但本圖實際繪製
+     * 全部 250 根（測試亦以此為基準），若只取 120 根算範圍，前 130 根
+     * 會被裁到畫布外。故這裡取「實際繪製的根數」為 N，同樣達成
+     * 「技術位不得影響 lo/hi」這個可驗收目標（AC-06）。
+     */
+    var visHigh = -Infinity, visLow = Infinity;
+    for (var vi0 = 0; vi0 < series.length; vi0++) {
+      if (series[vi0].h > visHigh) visHigh = series[vi0].h;
+      if (series[vi0].l < visLow) visLow = series[vi0].l;
+    }
+    var lo = visLow;
+    var hi = visHigh;
+    var spanY = hi - lo;
+    if (!isFinite(spanY) || spanY <= 0) spanY = Math.abs(hi) * 0.02 || 1;
+    lo = lo - spanY * 0.05;
+    hi = hi + spanY * 0.05;
+    // 現價若因資料異常落在範圍外（極少數），強制納入，否則 L0 會消失
+    if (isFinite(d.meta.price)) {
+      if (d.meta.price > hi) hi = d.meta.price + spanY * 0.02;
+      if (d.meta.price < lo) lo = d.meta.price - spanY * 0.02;
+    }
+    if (hi <= lo) { hi = lo + 1; }
 
     /**
-     * 進階模組的價位也要納入 Y 軸範圍。
-     * 只用 K 線高低點算範圍時，POC／VAH／VAL 或 FVG 區間若落在
-     * 近期區間之外就會被畫到圖外（看起來像「沒畫」）。
-     * 這裡刻意只納入「會被繪製」的層，避免關掉圖層後白白壓縮 K 線。
+     * 進階圖層資料。
+     *
+     * FVG 的 `barsAgo` 是「距最後一根多少根」，與序列總長度無關，
+     * 因此切換到更長的區間（5y）時仍能正確定位——只要把 n 換成
+     * 實際繪製序列的總長度即可。
      */
-    var advData = advChartData(d);
-    if (state.overlays.vp && advData.vp) {
-      [advData.vp.poc, advData.vp.vah, advData.vp.val].forEach(function (v) {
-        if (v != null && isFinite(v)) pool.push(v);
-      });
-    }
-    if (state.overlays.fvg && advData.fvg) {
-      advData.fvg.forEach(function (g) {
-        if (isFinite(g.lower)) pool.push(g.lower);
-        if (isFinite(g.upper)) pool.push(g.upper);
-      });
-    }
-
-    var poolMin = pool.length ? Math.min.apply(null, pool) : lo;
-    var poolMax = pool.length ? Math.max.apply(null, pool) : hi;
-    var padY = (hi - lo) * 0.08;
-    lo = Math.min(lo, poolMin) - padY;
-    hi = Math.max(hi, poolMax) + padY;
-    if (hi <= lo) { hi = lo + 1; }
+    var advData = advChartData(d, total);
 
     var n = series.length;
     var slot = plotW / n;
@@ -1039,7 +1376,19 @@
     var xOf = function (i) { return padL + slot * i + slot / 2; };
     var yOf = function (v) { return padT + plotH * (1 - (v - lo) / (hi - lo)); };
 
-    state.chartGeom = { xOf: xOf, yOf: yOf, slot: slot, padL: padL, padT: padT, plotW: plotW, plotH: plotH, series: series, lo: lo, hi: hi, n: n };
+    /**
+     * 幾何契約（測試鎖定）。
+     *
+     * `series` 仍是「本幀繪製的序列」，所以 hover 與測試讀到的都是看得見的
+     * 那一段；新增的 `full` / `viewStart` 只是讓時間軸標籤與縮放控制
+     * 知道自己在完整序列的哪個位置，不改變任何既有欄位的語意。
+     */
+    state.chartGeom = {
+      xOf: xOf, yOf: yOf, slot: slot, padL: padL, padT: padT,
+      plotW: plotW, plotH: plotH, series: series, lo: lo, hi: hi, n: n,
+      full: full, fullLen: total, viewStart: viewStart, viewCount: viewCount,
+      padR: padR,
+    };
     // 供回歸測試斷言「技術位是否畫在正確的價格座標」。
     // 掛在元素上而非 window，避免汙染全域；不影響任何渲染行為。
     $('priceChart').__geom = state.chartGeom;
@@ -1071,38 +1420,35 @@
       ctx.fillText((dt.getMonth() + 1) + '/' + dt.getDate(), xOf(i), H - padB / 2);
     }
 
-    // --- 買入區間帶 ---
+    // --- 買入區間帶（L4 背景，最底層） ---
     if (state.overlays.levels) {
       var yUpper = yOf(d.buyZone.upper), yLower = yOf(d.buyZone.lower);
-      ctx.fillStyle = COLORS.zone;
-      ctx.fillRect(padL, yUpper, plotW, Math.max(2, yLower - yUpper));
-      ctx.strokeStyle = COLORS.zoneEdge;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      [yUpper, yLower].forEach(function (y) {
-        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
-      });
-      // 停損 / 目標
-      ctx.strokeStyle = COLORS.down;
-      ctx.beginPath(); ctx.moveTo(padL, yOf(d.buyZone.stopLoss)); ctx.lineTo(padL + plotW, yOf(d.buyZone.stopLoss)); ctx.stroke();
-      ctx.strokeStyle = COLORS.up;
-      ctx.beginPath(); ctx.moveTo(padL, yOf(d.buyZone.target)); ctx.lineTo(padL + plotW, yOf(d.buyZone.target)); ctx.stroke();
-      ctx.setLineDash([]);
+      var bandTop = Math.max(padT, Math.min(yUpper, yLower));
+      var bandBot = Math.min(padT + plotH, Math.max(yUpper, yLower));
+      if (bandBot > bandTop) {
+        ctx.fillStyle = COLORS.zone;
+        ctx.fillRect(padL, bandTop, plotW, bandBot - bandTop);
+      }
     }
 
-    // --- 支撐壓力線 ---
-    if (state.overlays.levels) {
-      ctx.setLineDash([2, 4]);
-      ctx.lineWidth = 1.2;
-      d.levels.supports.forEach(function (s) { hline(ctx, yOf(s.price), padL, padL + plotW, COLORS.support); });
-      d.levels.resistances.forEach(function (s) { hline(ctx, yOf(s.price), padL, padL + plotW, COLORS.resistance); });
-      ctx.setLineDash([]);
-    }
-
-    // --- 進階圖層 ---
-    // 兩者都畫在 K 線之前，才不會蓋住蠟燭實體；順序上先畫區塊（FVG）
-    // 再畫線（POC/VAH/VAL），最後才畫 K 線，形成正確的疊放層級。
-    if (state.overlays.fvg) drawFVG(ctx, advData.fvg, xOf, yOf, padL, plotW, padT, plotH);
+    // --- 進階圖層（L4 背景）：FVG 填色與 VP 柱，畫在 K 線之前 ---
+    /**
+     * FVG 以「絕對索引」定位（fromIdx 是從序列尾端回推），
+     * 縮放後必須減去視窗起點才對得上畫布座標。
+     * 完全落在視窗外就跳過，避免畫到畫布外被裁掉卻仍計算。
+     */
+    var advDataView = {
+      vp: advData.vp,
+      fvg: advData.fvg
+        ? advData.fvg
+          .map(function (g) { return Object.assign({}, g, { fromIdx: g.fromIdx - absOffset }); })
+          // 減去視窗起點後可能變成負數（缺口整段落在視窗左側之外）。
+          // 這種要一併濾掉：drawFVG 會把負索引夾成 padL，畫出一條從左邊界
+          // 延伸到右邊界的假區間帶，看起來像「這裡有缺口」，實際上是錯的。
+          .filter(function (g) { return g.fromIdx >= 0 && g.fromIdx < n; })
+        : null,
+    };
+    if (state.overlays.fvg) drawFVG(ctx, advDataView.fvg, xOf, yOf, padL, plotW, padT, plotH);
     if (state.overlays.vp) drawVolumeProfile(ctx, advData.vp, yOf, padL, plotW, padT, plotH);
 
     // --- K 線 ---
@@ -1134,10 +1480,149 @@
       linePlot(ctx, bollData.mid, xOf, yOf, COLORS.boll, 1.4, []);
     }
 
-    // --- 均線 ---
+    // --- 均線（L4 背景） ---
     if (state.overlays.ma) {
       maSeries.forEach(function (m) { linePlot(ctx, m.data, xOf, yOf, m.color, 1.5, []); });
     }
+
+    /**
+     * ==================== 技術位水平線（L1–L3） ====================
+     *
+     * 依規格書 B1／B2 實作：
+     *   L1  決策線：進場上緣、下緣、止損        → 配額 3，永不降級
+     *   L1-T 目標線：目標①、目標②              → 配額 2，②可降級
+     *   L2  結構線：POC/VAH/VAL                 → 未滿 5 才遞補
+     *   L3  參考線：支撐、壓力                  → 僅 hover，或未滿 5 才畫
+     *   L0  基準線：現價（最後畫，不佔配額）
+     *
+     * 超額時的降級鏈：L3 → L2 → L1-T②。L1 三條與 L0 永不降級。
+     */
+    var drawnLines = [];        // 實際畫出的水平線（供標籤與測試）
+    var edgeMarks = [];         // 超出視口、改以邊緣箭頭呈現的線
+
+    // L1 三條核心決策線（依 B2 優先序 1–3）
+    var z = d.buyZone;
+    var l1 = [
+      { v: z.upper, key: 'zone-upper', label: '進場上緣' },
+      { v: z.stopLoss, key: 'stoploss', label: '止損', action: '跌破即失效' },
+      { v: z.lower, key: 'zone-lower', label: '進場下緣' },
+    ];
+    // L1-T 目標①＝POC（若可得），目標②＝target
+    // tp1IsPoc 必須獨立記錄：不能靠「drawnLines 裡有沒有 key==='tp1'」反推，
+    // 因為 POC 低於現價時 tp1 取的是 z.target，那時 POC 仍應以 L2 另行繪出，
+    // 否則 POC 會被靜默跳過而完全消失（實測會從圖上消失）。
+    var pocVal = (state.overlays.vp && advData.vp && isFinite(advData.vp.poc)) ? advData.vp.poc : null;
+    var tp1IsPoc = pocVal != null && pocVal > d.meta.price;
+    var tp1 = tp1IsPoc ? pocVal : (isFinite(z.target) ? z.target : null);
+    var tp2 = (tp1IsPoc && isFinite(z.target) && z.target !== pocVal) ? z.target : null;
+
+    if (state.overlays.levels) {
+      l1.forEach(function (item) {
+        if (!isFinite(item.v)) return;
+        pushLine(item.v, 'L1', item.label, item.action, item.key);
+      });
+      if (tp1 != null) pushLine(tp1, 'L1T', '目標①', '減半倉', 'tp1');
+      if (tp2 != null) pushLine(tp2, 'L1T', '目標②', '移止損至保本', 'tp2');
+    }
+
+    // L2 結構線：POC / VAH / VAL（僅在尚有配額時遞補）
+    if (state.overlays.vp && advData.vp) {
+      if (pocVal != null && !tp1IsPoc) {
+        pushLine(advData.vp.poc, 'L2', 'POC', null, 'poc');
+      }
+      pushLine(advData.vp.vah, 'L2', 'VAH', null, 'vah');
+      pushLine(advData.vp.val, 'L2', 'VAL', null, 'val');
+    }
+
+    // L3 參考線：支撐壓力（最後遞補，超出就只留 hover）
+    if (state.overlays.levels) {
+      d.levels.supports.forEach(function (s, i) {
+        pushLine(s.price, 'L3', '支撐' + (i + 1), null, 'sup' + i);
+      });
+      d.levels.resistances.forEach(function (s, i) {
+        pushLine(s.price, 'L3', '壓力' + (i + 1), null, 'res' + i);
+      });
+    }
+
+    /**
+     * 加入一條候選線：依配額決定「畫線 / 降級」。
+     * 配額規則（B2）：L1 三條保留；其餘共用剩下名額，總數上限 5。
+     */
+    function pushLine(v, tier, label, action, key) {
+      if (!isFinite(v)) return;
+      // 超出視口 → 交給邊緣箭頭，不畫線、不佔配額
+      if (v > hi || v < lo) {
+        if (tier === 'L1' || tier === 'L1T') {
+          edgeMarks.push({ v: v, tier: tier, label: label, action: action });
+        }
+        return;
+      }
+      var quota = (tier === 'L1') ? 3 : 5;
+      if (drawnLines.length >= quota) return;   // 降級：不畫線
+      drawnLines.push({ v: v, tier: tier, label: label, action: action, key: key });
+    }
+
+    // 依層級由低到高繪製（L3 → L2 → L1T → L1），確保決策線壓在最上層
+    drawnLines.sort(function (a, b) { return TIER_ORDER[a.tier] - TIER_ORDER[b.tier]; });
+    drawnLines.forEach(function (ln) {
+      var st = TIER_STYLE[ln.tier];
+      var y = Math.round(yOf(ln.v)) + 0.5;
+      ctx.save();
+      ctx.globalAlpha = st.alpha || 1;
+      ctx.strokeStyle = st.color;
+      ctx.lineWidth = st.lw;
+      ctx.setLineDash(st.dash);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + plotW, y);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // --- L3 支撐壓力在 L1/其它線之上仍要能 hover，故不另畫 ---
+
+    // --- 標籤（B3：垂直錯位階梯，避免疊字） ---
+    drawLineLabels(ctx, drawnLines, yOf, padL, plotW, padT, plotH);
+
+    // --- B7：超出視口的決策線，以邊緣箭頭呈現 ---
+    drawEdgeMarkers(ctx, edgeMarks, yOf, padL, plotW, padT, plotH, hi, lo);
+
+    // --- L0 現價線（最高優先級，最後繪製；不佔配額） ---
+    if (isFinite(d.meta.price) && d.meta.price >= lo && d.meta.price <= hi) {
+      var yP = Math.round(yOf(d.meta.price)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = COLORS.l0;
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(padL, yP);
+      ctx.lineTo(padL + plotW, yP);
+      ctx.stroke();
+      // 右側價格 pill
+      var pillTxt = '現價 ' + fmtPrice(d.meta.price);
+      ctx.font = '600 10px ui-monospace, monospace';
+      var tw = ctx.measureText(pillTxt).width;
+      var pillW = tw + 12;
+      var pillX = padL + plotW + 3;
+      ctx.fillStyle = COLORS.l0;
+      roundRect(ctx, pillX, yP - 8, Math.min(pillW, padR - 6), 16, 4);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(pillTxt, pillX + 6, yP + 0.5);
+      ctx.restore();
+    }
+
+    // 供驗證用的本幀摘要（B2 配額 / B7 邊緣箭頭）。
+    // 與 __geom 同樣只做「讀」，不改任何渲染行為。
+    state.chartGeom.tiers = drawnLines.map(function (l) {
+      return { tier: l.tier, label: l.label, v: l.v };
+    });
+    state.chartGeom.edge = edgeMarks.map(function (m) {
+      return { tier: m.tier, label: m.label, v: m.v };
+    });
+    $('priceChart').__geom = state.chartGeom;
 
     // --- 成交量 ---
     if (showVol) {
@@ -1180,6 +1665,191 @@
   }
 
   /**
+   * 估算 Y 軸刻度的最大字元長度，供 A4 動態計算 padR。
+   * 取近期高點與現價的較大者——刻度上限就是這個量級。
+   *
+   * 注意這裡必須用**完整序列**的尾段，而非縮放後的可見區間：
+   * padR 若隨縮放跳動，右側價格刻度會忽寬忽窄，整個繪圖區跟著位移。
+   */
+  function hiEstimate(series) {
+    var m = -Infinity;
+    for (var i = Math.max(0, series.length - 250); i < series.length; i++) {
+      if (series[i].h > m) m = series[i].h;
+    }
+    var p = state.data && state.data.meta ? state.data.meta.price : null;
+    if (isFinite(p) && p > m) m = p;
+    return isFinite(m) ? m : 1;
+  }
+
+  /** 圓角矩形（不依賴 ctx.roundRect，舊版 Safari 沒有） */
+  function roundRect(ctx, x, y, w, h, r) {    if (w <= 0 || h <= 0) return;
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  /**
+   * B1：四層視覺樣式。層級靠「線寬 + 虛線節奏 + 透明度」區分，
+   * 刻意不靠顏色——因為紅(#d92b2b)同時是「上漲」與「壓力」，
+   * 綠(#0f9d58)同時是「下跌」與「支撐」，語義已飽和。
+   * 必須定義在模組作用域：drawChart 與 drawLineLabels 兩邊都要用。
+   */
+  var TIER_STYLE = {
+    L1:  { color: COLORS.l1,  lw: 2.0, dash: [] },            // 決策線：實線最粗
+    L1T: { color: COLORS.l1t, lw: 1.6, dash: [6, 3] },        // 目標：長虛線
+    L2:  { color: COLORS.l2,  lw: 1.2, dash: [5, 3] },        // 結構：中虛線
+    L3:  { color: COLORS.l3,  lw: 1.0, dash: [2, 4], alpha: 0.45 }, // 參考：點線且淡
+  };
+  /** 繪製順序：數字越小越先畫（越靠底層） */
+  var TIER_ORDER = { L3: 0, L2: 1, L1T: 2, L1: 3 };
+
+  /**
+   * B4：依容器寬度決定標籤詳略。
+   *   ≥1024px：完整語義 + 價格，例「止損 331.80（跌破即失效）」
+   *   640–1023px：語義 + 價格
+   *   <640px：代號 + 價格，例「SL 331.80」
+   */
+  var TIER_CODE = {
+    '進場上緣': 'EN↑', '進場下緣': 'EN↓', '止損': 'SL',
+    '目標①': 'TP1', '目標②': 'TP2', 'POC': 'POC', 'VAH': 'VAH', 'VAL': 'VAL',
+  };
+  function labelMode() {
+    var w = window.innerWidth;
+    if (w >= 1024) return 'full';
+    if (w >= 640) return 'mid';
+    return 'short';
+  }
+  function buildLabel(ln) {
+    var mode = labelMode();
+    var code = TIER_CODE[ln.label] || (ln.label.length > 4 ? ln.label.slice(0, 4) : ln.label);
+    var price = fmtPrice(ln.v);
+    if (mode === 'full') {
+      return ln.action ? (ln.label + ' ' + price + '（' + ln.action + '）')
+        : (ln.label + ' ' + price);
+    }
+    if (mode === 'mid') {
+      return ln.label + ' ' + price;
+    }
+    return code + ' ' + price;
+  }
+
+  /**
+   * B3：標籤垂直錯位。
+   * 同側任兩標籤 y 距離 < 12px 即視為碰撞，後者下移；超過 4 層併入。
+   */
+  function drawLineLabels(ctx, lines, yOf, padL, plotW, padT, plotH) {
+    if (!lines.length) return;
+    var MIN_GAP = 12;
+    var items = lines.map(function (ln) {
+      return { ln: ln, y: yOf(ln.v), ty: yOf(ln.v) };
+    }).sort(function (a, b) { return a.y - b.y; });
+
+    // 由下往上錯位（避免壓到下方標籤）
+    var lastY = -Infinity;
+    items.forEach(function (it) {
+      if (it.ty < lastY + MIN_GAP) it.ty = lastY + MIN_GAP;
+      lastY = it.ty;
+    });
+    // 若整體超出繪圖區底部，整體上移
+    var overflow = lastY - (padT + plotH - 4);
+    if (overflow > 0) {
+      items.forEach(function (it) { it.ty -= overflow; });
+    }
+
+    ctx.save();
+    ctx.font = '600 9.5px ui-monospace, monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    items.forEach(function (it) {
+      var st = TIER_STYLE[it.ln.tier];
+      var txt = buildLabel(it.ln);
+      var labelX = padL + 6;
+      var tw = ctx.measureText(txt).width;
+      // 引線：標籤被移開時，用細線連回真實價位
+      if (Math.abs(it.ty - it.y) > 0.6) {
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.strokeStyle = st.color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(labelX + tw + 2, it.ty);
+        ctx.lineTo(labelX + tw + 2, it.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // 標籤底（淡底提升可讀性，尤其壓在 K 線上時）
+      ctx.save();
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = '#fff';
+      roundRect(ctx, labelX - 3, it.ty - 6.5, tw + 6, 13, 3);
+      ctx.fill();
+      ctx.restore();
+      ctx.globalAlpha = st.alpha || 1;
+      ctx.fillStyle = st.color;
+      ctx.fillText(txt, labelX, it.ty);
+      ctx.globalAlpha = 1;
+    });
+    ctx.restore();
+  }
+
+  /**
+   * B7：超出視口的決策線以邊緣箭頭呈現。
+   * L1／L1-T 實心、L2 空心、L3 不顯示（避免邊緣變成另一種雜訊）。
+   * 同向最多 3 個，超出顯示 +N。
+   */
+  function drawEdgeMarkers(ctx, marks, yOf, padL, plotW, padT, plotH, hi, lo) {
+    if (!marks.length) return;
+    var up = marks.filter(function (m) { return m.v > hi; })
+      .sort(function (a, b) { return b.v - a.v; });
+    var dn = marks.filter(function (m) { return m.v < lo; })
+      .sort(function (a, b) { return a.v - b.v; });
+
+    var draw = function (list, isTop) {
+      var cap = 3;
+      list.slice(0, cap).forEach(function (m, i) {
+        var y = isTop ? padT + 8 + i * 15 : padT + plotH - 8 - i * 15;
+        var x = padL + plotW - 14;
+        var solid = (m.tier === 'L1' || m.tier === 'L1T');
+        ctx.save();
+        ctx.font = '600 9px ui-monospace, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        var txt = (isTop ? '▲ ' : '▼ ') + (m.action === '跌破即失效' ? 'SL' : (TIER_CODE[m.label] || m.label)) + ' ' + fmtPrice(m.v);
+        var tw = ctx.measureText(txt).width;
+        // 底
+        ctx.fillStyle = solid ? 'rgba(29,78,216,.92)' : 'rgba(100,116,139,.92)';
+        roundRect(ctx, x - tw - 8, y - 7, tw + 10, 14, 4);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(txt, x, y + 0.5);
+        ctx.restore();
+      });
+      if (list.length > cap) {
+        var y2 = isTop ? padT + 8 + cap * 15 : padT + plotH - 8 - cap * 15;
+        ctx.save();
+        ctx.font = '600 9px ui-monospace, monospace';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(100,116,139,.75)';
+        ctx.fillText('+' + (list.length - cap), padL + plotW - 14, y2);
+        ctx.restore();
+      }
+    };
+    draw(up, true);
+    draw(dn, false);
+  }
+
+
+  /**
    * 從 advancedTools 取出圖表需要的資料
    *
    * 這裡有一個容易錯的對應關係：後端算 FVG 用「全部 K 線」（lookback 120），
@@ -1187,7 +1857,7 @@
    * 所以換算成圖表索引就是 n - 1 - barsAgo。用這個方式對齊，
    * 不管後端 lookback 幾根都正確，不需要兩邊共用常數。
    */
-  function advChartData(d) {
+  function advChartData(d, seriesLen) {
     var out = { vp: null, fvg: null };
     var at = d && d.advancedTools;
     if (!at || !at.modules) return out;
@@ -1210,7 +1880,12 @@
       if (m.key === 'fvg') {
         // 只畫未回補的缺口（已回補的畫上去只會變成雜訊），
         // 且只保留落在圖表可見範圍內的，避免右側延伸帶互相重疊。
-        var n = (d.series && d.series.daily ? d.series.daily.length : 0);
+        //
+        // seriesLen 由呼叫方傳入「本幀實際繪製的序列長度」：
+        // 預設是 250，切換到 5y 時會是 1200+。barsAgo 是相對最後一根的
+        // 距離，所以 n 必須是「完整序列」的長度，不能是縮放後的可見根數。
+        var n = seriesLen != null ? seriesLen
+          : (d.series && d.series.daily ? d.series.daily.length : 0);
         out.fvg = (m.data.active || [])
           .map(function (g) {
             var idx = n - 1 - (g.barsAgo || 0);
@@ -1257,33 +1932,12 @@
       ctx.fillRect(left, Math.min(yTop, yBot), w, h);
     });
 
-    // POC / VAH / VAL 三條關鍵線
-    var marks = [
-      { v: vp.poc, c: COLORS.poc, lw: 1.6, dash: [] },
-      { v: vp.vah, c: COLORS.vah, lw: 1.1, dash: [5, 3] },
-      { v: vp.val, c: COLORS.val, lw: 1.1, dash: [5, 3] },
-    ];
-    marks.forEach(function (mk) {
-      if (mk.v == null || !isFinite(mk.v)) return;
-      var y = Math.round(yOf(mk.v)) + 0.5;
-      if (y < padT - 1 || y > padT + plotH + 1) return;   // 超出繪圖區就不畫
-      ctx.strokeStyle = mk.c;
-      ctx.lineWidth = mk.lw;
-      ctx.setLineDash(mk.dash);
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(padL + plotW, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 左側標籤（置於柱狀圖右緣之外，避免壓在柱子上）
-      var txt = mk.v === vp.poc ? 'POC' : mk.v === vp.vah ? 'VAH' : 'VAL';
-      ctx.font = '600 10px ui-monospace, monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillStyle = mk.c;
-      ctx.fillText(txt + ' ' + fmtPrice(mk.v), padL + maxBarW + 6, y - 2);
-    });
+    // POC / VAH / VAL 的「線」不在這裡畫。
+    // 舊版在此自行繪製三條線＋左側標籤，但同一價位又會被 pushLine() 以 L2
+    // 再壓一次，結果是：同價位兩條線、兩處標籤，且這裡的版本繞過 B2 配額，
+    // 讓「最多 5 條水平線」的約束形同失效（實測畫出 6 條以上）。
+    // 現在只保留籌碼柱（L4 背景），線與標籤統一由 L1/L2 層級系統輸出，
+    // 才能同時受 A6 視口裁切與 B2 配額管轄。
     ctx.restore();
   }
 
@@ -1427,19 +2081,21 @@
       items.push('<span><i class="lg-line" style="background:' + m.color + '"></i>MA' + m.p + '</span>');
     });
     if (state.overlays.boll) items.push('<span style="color:' + COLORS.boll + '"><i class="lg-dash"></i>布林通道 20,2</span>');
+    // 五級層級說明（規格書 B1）：以線寬／線型區分，不再用顏色承載語義
+    items.push('<span class="lg-tier"><i class="lg-line" style="background:' + COLORS.l0 + ';height:2px"></i>現價（L0）</span>');
     if (state.overlays.levels) {
-      items.push('<span><i class="lg-line" style="background:' + COLORS.support + '"></i>支撐</span>');
-      items.push('<span><i class="lg-line" style="background:' + COLORS.resistance + '"></i>壓力</span>');
-      items.push('<span><i class="lg-line" style="background:' + COLORS.zoneEdge + '"></i>建議買入區間</span>');
-      items.push('<span><i class="lg-line" style="background:' + COLORS.down + '"></i>停損</span>');
-      items.push('<span><i class="lg-line" style="background:' + COLORS.up + '"></i>目標</span>');
+      items.push('<span class="lg-tier"><i class="lg-line" style="background:' + COLORS.l1 + ';height:2.5px"></i>決策線（L1）</span>');
+      items.push('<span class="lg-tier"><i class="lg-line" style="background:' + COLORS.l1t + ';height:2px"></i>目標（L1-T）</span>');
     }
     if (state.overlays.vol) items.push('<span>下方柱狀為成交量</span>');
     if (state.overlays.vp) {
-      items.push('<span><i class="lg-line" style="background:' + COLORS.poc + '"></i>POC 控制點</span>');
-      items.push('<span><i class="lg-dash" style="color:' + COLORS.vah + '"></i>VAH 價值區上界</span>');
-      items.push('<span><i class="lg-dash" style="color:' + COLORS.val + '"></i>VAL 價值區下界</span>');
+      items.push('<span><i class="lg-line" style="background:' + COLORS.l2 + '"></i>POC 控制點</span>');
+      items.push('<span><i class="lg-dash" style="color:' + COLORS.l2 + '"></i>VAH 價值區上界</span>');
+      items.push('<span><i class="lg-dash" style="color:' + COLORS.l2 + '"></i>VAL 價值區下界</span>');
       items.push('<span><i class="lg-box" style="background:' + COLORS.vpBarVA + '"></i>成交量分佈</span>');
+    }
+    if (state.overlays.levels) {
+      items.push('<span><i class="lg-line" style="background:' + COLORS.l3 + ';opacity:.6"></i>支撐／壓力（L3）</span>');
     }
     if (state.overlays.fvg) {
       items.push('<span><i class="lg-box" style="background:' + COLORS.fvgBull + ';border-color:' + COLORS.fvgBullEdge + '"></i>看漲 FVG</span>');
@@ -1472,48 +2128,479 @@
   }
 
   /* ---- 滑鼠互動 ---- */
+  /**
+   * A1：三種模式對應框架的三層濾網。
+   * 模式只決定「哪些圖層該開」，不改變任何計算。
+   */
+  var MODES = {
+    // 第一層（日線）：看防守區在哪。留下結構與成本分佈，關掉短均線與布林。
+    structure: { ma: false, levels: true, vp: true, fvg: true, boll: false, vol: false },
+    // 第二層（1H／15M）：看是真跌破還是掃損。留下支撐壓力與缺口。
+    confirm: { ma: false, levels: true, vp: false, fvg: true, boll: false, vol: true },
+    // 第三層（5M）：看現在該不該扣扳機。幾乎全部關掉，只留決策線與缺口。
+    execute: { ma: false, levels: true, vp: false, fvg: true, boll: false, vol: false },
+  };
+
+  function applyMode(name) {
+    var preset = MODES[name];
+    if (!preset) return;
+    Object.keys(preset).forEach(function (k) { state.overlays[k] = preset[k]; });
+    // 同步 tab 按鈕的高亮狀態
+    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
+      b.classList.toggle('active', !!state.overlays[b.dataset.overlay]);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.mode-btn'), function (b) {
+      b.classList.toggle('active', b.dataset.mode === name);
+    });
+    drawChart();
+  }
+
+  function clearModeActive() {
+    Array.prototype.forEach.call(document.querySelectorAll('.mode-btn'), function (b) {
+      b.classList.remove('active');
+    });
+  }
+
+  /* ==================== 時間區間切換 ==================== */
+  /**
+   * 為什麼需要打 API 而不是只切前端：
+   *   /api/analyze 只附 250 根日線（控制回應大小）。切到 2y 要 501 根、
+   *   5y 要 1250 根，前端沒有更多資料可切。所以 1y 以內純前端切；
+   *   2y / 5y 才去 /api/kline 取。
+   */
+  var RANGE_LABEL = { '3m': '3 個月', '6m': '6 個月', '1y': '1 年', '2y': '2 年', '5y': '5 年' };
+
+  function setRangeActive(key) {
+    Array.prototype.forEach.call(document.querySelectorAll('.range-btn'), function (b) {
+      b.classList.toggle('active', b.dataset.range === (key || '1y'));
+    });
+  }
+
+  function setRangeStatus(text, kind) {
+    var el = $('rangeStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'range-status' + (kind ? ' ' + kind : '');
+    el.hidden = !text;
+  }
+
+  function applyRange(rangeKey) {
+    var key = rangeKey || '1y';
+    // 重置視窗：切換區間後「顯示全部」，否則使用者在 5y 放大到最後 60 根，
+    // 再切回 3m 時會落在一个不存在的索引上，畫面變成空白。
+    state.view = { start: 0, count: null };
+    state.hoverIndex = null;
+
+    if (key === '1y') {
+      // 1y 與 analyze 附帶的 250 根等價，直接用現有資料，不必多一次請求
+      state.kline = null;
+      state.klineRange = '1y';
+      setRangeActive('1y');
+      setRangeStatus('');
+      drawChart();
+      updateZoomUi();
+      return;
+    }
+
+    var sym = state.data && state.data.meta ? state.data.meta.symbol : null;
+    if (!sym) return;
+
+    // 已有同區間資料就直接重繪（來回切換不重複打上游）
+    if (state.kline && state.klineRange === key) {
+      setRangeActive(key);
+      setRangeStatus('');
+      drawChart();
+      updateZoomUi();
+      return;
+    }
+
+    state.klineLoading = true;
+    setRangeActive(key);
+    setRangeStatus('正在載入 ' + (RANGE_LABEL[key] || key) + ' 資料…');
+
+    SA.api('/api/kline?symbol=' + encodeURIComponent(sym) + '&range=' + encodeURIComponent(key))
+      .then(function (res) {
+        state.klineLoading = false;
+        if (!res.candles || res.candles.length < 2) {
+          // 資料不足時退回 1y，不要留下空白圖表
+          setRangeStatus((RANGE_LABEL[key] || key) + ' 資料不足（僅 ' + (res.candles ? res.candles.length : 0) + ' 根），已顯示 1 年', 'warn');
+          state.kline = null;
+          state.klineRange = '1y';
+          setRangeActive('1y');
+          drawChart();
+          updateZoomUi();
+          return;
+        }
+        state.kline = res;
+        state.klineRange = key;
+        state.view = { start: 0, count: null };
+        setRangeStatus(res.bars + ' 根日線 · ' + (res.source === 'yahoo' ? 'Yahoo' : res.source), 'ok');
+        drawChart();
+        updateZoomUi();
+      })
+      .catch(function (err) {
+        state.klineLoading = false;
+        var desc = SA.describeError(err);
+        setRangeStatus('載入失敗：' + desc.message + '（仍顯示 1 年）', 'err');
+        state.kline = null;
+        state.klineRange = '1y';
+        setRangeActive('1y');
+        drawChart();
+        updateZoomUi();
+      });
+  }
+
+  /* ==================== 縮放與平移 ==================== */
+  var MIN_BARS = 30;    // 最少顯示 30 根，再少就看不出型態
+
+  function seriesTotal() {
+    return state.chartGeom ? state.chartGeom.fullLen : 0;
+  }
+
+  /** 限制視窗在合法範圍內，回傳是否有變動 */
+  function clampView() {
+    var total = seriesTotal();
+    if (!total) return false;
+    var count = state.view.count == null ? total : Math.max(MIN_BARS, Math.min(total, Math.round(state.view.count)));
+    var start = Math.max(0, Math.min(total - count, Math.round(state.view.start || 0)));
+    var changed = count !== state.view.count || start !== state.view.start;
+    state.view.count = count >= total ? null : count;
+    state.view.start = start;
+    return changed;
+  }
+
+  /**
+   * 以某個「可見區間內的相對比例」為中心縮放。
+   *
+   * 為什麼要錨定而不是單純改 count：滑鼠滾輪縮放時，使用者預期
+   * 「指標指到的那根 K 線不動」。若只改 count，畫面會從最右邊開始
+   * 一路往右縮，指標下的內容會漂走。
+   */
+  function zoomAt(ratio, factor) {
+    var total = seriesTotal();
+    if (!total) return;
+    var curCount = state.view.count == null ? total : state.view.count;
+    var curStart = state.view.start || 0;
+
+    var nextCount = Math.round(curCount * factor);
+    nextCount = Math.max(MIN_BARS, Math.min(total, nextCount));
+    if (nextCount === curCount) return;
+
+    var anchorAbs = curStart + curCount * ratio;
+    var nextStart = Math.round(anchorAbs - nextCount * ratio);
+    state.view.count = nextCount >= total ? null : nextCount;
+    state.view.start = nextStart;
+    clampView();
+    drawChart();
+    updateZoomUi();
+  }
+
+  function panBy(bars) {
+    var total = seriesTotal();
+    if (!total) return;
+    var curCount = state.view.count == null ? total : state.view.count;
+    if (curCount >= total) return;   // 全顯示時沒有可平移的內容
+    state.view.start = (state.view.start || 0) + bars;
+    clampView();
+    drawChart();
+    updateZoomUi();
+  }
+
+  function resetZoom() {
+    state.view = { start: 0, count: null };
+    drawChart();
+    updateZoomUi();
+  }
+
+  /** 更新縮放控制列的文字與可用狀態 */
+  function updateZoomUi() {
+    var total = seriesTotal();
+    var g = state.chartGeom;
+    var bar = $('zoomBar');
+    if (!bar || !g) return;
+    bar.hidden = false;
+
+    var count = state.view.count == null ? total : state.view.count;
+    var start = state.view.start || 0;
+
+    // 顯示「第 a–b 根，共 N 根」
+    var label = total
+      ? ('第 ' + (start + 1) + '–' + (start + count) + ' 根 · 共 ' + total + ' 根')
+      : '—';
+    var el = $('zoomLabel');
+    if (el) el.textContent = label;
+
+    var isFull = count >= total;
+    ['zoomIn', 'zoomOut'].forEach(function (id) {
+      var b = $(id);
+      if (!b) return;
+      b.disabled = id === 'zoomIn' ? count <= MIN_BARS : isFull && count >= total ? false : false;
+    });
+    var zi = $('zoomIn'), zo = $('zoomOut');
+    if (zi) zi.disabled = count <= MIN_BARS;
+    if (zo) zo.disabled = count >= total;
+    var pl = $('panLeft'), pr = $('panRight');
+    if (pl) pl.disabled = isFull || start <= 0;
+    if (pr) pr.disabled = isFull || start + count >= total;
+    var rs = $('zoomReset');
+    if (rs) rs.disabled = isFull && start === 0;
+
+    // 可見區間的時間範圍（讓人知道現在看的是哪一段）
+    var rangeEl = $('zoomRange');
+    if (rangeEl) {
+      if (g.full.length) {
+        var a = g.full[Math.min(start, g.full.length - 1)];
+        var b = g.full[Math.min(start + count - 1, g.full.length - 1)];
+        rangeEl.textContent = fmtDate(a.t) + ' → ' + fmtDate(b.t);
+      } else {
+        rangeEl.textContent = '';
+      }
+    }
+  }
+
+  function fmtDate(t) {
+    var dt = new Date(t);
+    return (dt.getFullYear() % 100) + '/' + (dt.getMonth() + 1) + '/' + dt.getDate();
+  }
+
   function bindChartInteraction() {
     var cv = $('priceChart');
     var tip = $('chartTooltip');
+    var infoBar = $('chartInfoBar');
+    var infoBody = $('chartInfoBody');
+
+    /** 是否為窄螢幕（資訊改用下方固定列，避免手指遮擋） */
+    function isNarrow() { return window.innerWidth <= 900; }
 
     function onMove(clientX, clientY) {
       var g = state.chartGeom;
       if (!g) return;
       var rect = cv.getBoundingClientRect();
       var x = clientX - rect.left;
-      var idx = Math.floor((x - g.padL) / g.slot);
+      // 吸附到最近 K 線中心，而非自由座標（A7）
+      var idx = Math.round((x - g.padL - g.slot / 2) / g.slot);
       idx = Math.max(0, Math.min(g.n - 1, idx));
       state.hoverIndex = idx;
       drawChart();
+      showInfo(idx, rect, g);
+    }
 
+    function showInfo(idx, rect, g) {
       var b = g.series[idx];
       var dt = new Date(b.t);
       var chg = b.o ? ((b.c - b.o) / b.o) * 100 : 0;
-      tip.innerHTML = '<strong>' + dt.toLocaleDateString('zh-TW') + '</strong><br>'
-        + '開 ' + fmt(b.o) + '　高 ' + fmt(b.h) + '<br>'
-        + '低 ' + fmt(b.l) + '　收 ' + fmt(b.c) + '<br>'
-        + '漲跌 ' + pct(chg, 2) + '　量 ' + fmtInt(b.v)
-        + hoverAdvLines(state.data, b);
+      var head = '<strong>' + dt.toLocaleDateString('zh-TW') + '</strong>　'
+        + '開 ' + fmt(b.o) + '　高 ' + fmt(b.h) + '　'
+        + '低 ' + fmt(b.l) + '　收 ' + fmt(b.c) + '　'
+        + '漲跌 ' + pct(chg, 2) + '　量 ' + fmtInt(b.v);
+      var extra = hoverAdvLines(state.data, b);
+
+      if (isNarrow() && infoBar && infoBody) {
+        // A7：行動端資訊置於圖表下方固定列，不遮擋手指
+        infoBody.innerHTML = head + extra;
+        infoBar.hidden = false;
+        tip.hidden = true;
+        return;
+      }
+      tip.innerHTML = head + extra;
       tip.hidden = false;
       tip.style.left = Math.min(rect.width - 70, Math.max(70, g.xOf(idx))) + 'px';
       tip.style.top = Math.max(80, g.yOf(b.c) - 8) + 'px';
     }
 
-    cv.addEventListener('mousemove', function (e) { onMove(e.clientX, e.clientY); });
+    /**
+     * 視口切換同步（A7 的邊界條件）。
+     * 桌面 hover 時浮動 tooltip 會定位在圖表座標的右半側（例如 left≈700px）；
+     * 若使用者把視窗縮到手機寬度，那個絕對定位的浮層仍停在舊座標，
+     * 直接把 scrollWidth 撐到 1000px 以上，產生水平滾動。
+     * 因此尺寸變化時：窄螢幕一律收起浮層，改由下方固定列承載資訊。
+     */
+    function syncViewport() {
+      if (!isNarrow()) return;
+      tip.hidden = true;
+      tip.style.left = '';
+      tip.style.top = '';
+    }
+    window.addEventListener('resize', syncViewport);
+    syncViewport();
+
+    cv.addEventListener('mousemove', function (e) {
+      // 拖拽平移中：不觸發 hover（否則十字線會跟著甩）
+      if (dragState.active) { onDrag(e.clientX, e.clientY); return; }
+      onMove(e.clientX, e.clientY);
+    });
+    // 桌面：mouseleave 立即清除（A7 規範 ≤50ms）
     cv.addEventListener('mouseleave', function () {
+      if (isNarrow()) return;   // 觸控裝置不因 mouseleave 清除
+      if (dragState.active) return;
       state.hoverIndex = null;
       tip.hidden = true;
       drawChart();
     });
-    cv.addEventListener('touchstart', function (e) {
-      if (e.touches[0]) onMove(e.touches[0].clientX, e.touches[0].clientY);
-    }, { passive: true });
-    cv.addEventListener('touchmove', function (e) {
-      if (e.touches[0]) { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
+
+    /* ---------------- 滾輪縮放 ---------------- */
+    /**
+     * 為什麼要 preventDefault：
+     *   圖表佔滿一屏高度時，滾輪在圖上滾動會連帶捲動整個頁面，
+     *   使用者永遠縮放不到，只會覺得「這張圖滑不動」。
+     *   因此僅在指標位於繪圖區內時攔截，其餘區域（含右側價格軸留白）
+     *   仍讓頁面正常捲動，避免使用者被鎖在圖表上。
+     *   必須 passive:false 才能 preventDefault。
+     */
+    cv.addEventListener('wheel', function (e) {
+      var g = state.chartGeom;
+      if (!g) return;
+      var rect = cv.getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      if (x < g.padL || x > g.padL + g.plotW) return;   // 在繪圖區外：讓頁面捲動
+      e.preventDefault();
+      var ratio = Math.max(0, Math.min(1, (x - g.padL) / g.plotW));
+      // deltaY > 0 = 往下滾 = 縮小（顯示更多根）；< 0 = 放大
+      var factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
+      zoomAt(ratio, factor);
     }, { passive: false });
-    cv.addEventListener('touchend', function () {
-      setTimeout(function () { state.hoverIndex = null; tip.hidden = true; drawChart(); }, 1200);
+
+    /* ---------------- 拖拽平移 ---------------- */
+    var dragState = { active: false, x0: 0, startBars: 0 };
+
+    function onDragStart(clientX) {
+      var g = state.chartGeom;
+      if (!g) return false;
+      var total = g.fullLen;
+      var count = state.view.count == null ? total : state.view.count;
+      if (count >= total) return false;   // 全顯示時無可平移
+      dragState.active = true;
+      dragState.x0 = clientX;
+      dragState.startBars = state.view.start || 0;
+      cv.classList.add('dragging');
+      tip.hidden = true;
+      return true;
+    }
+
+    function onDrag(clientX) {
+      var g = state.chartGeom;
+      if (!g || !dragState.active) return;
+      var dx = clientX - dragState.x0;
+      // 換算成根數：往右拖 = 看更早的資料（start 減少）
+      var bars = Math.round(dx / g.slot);
+      state.view.start = dragState.startBars - bars;
+      clampView();
+      drawChart();
+      updateZoomUi();
+    }
+
+    function onDragEnd() {
+      if (!dragState.active) return;
+      dragState.active = false;
+      cv.classList.remove('dragging');
+    }
+
+    cv.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      if (onDragStart(e.clientX)) e.preventDefault();
     });
+    window.addEventListener('mouseup', onDragEnd);
+    window.addEventListener('mousemove', function (e) {
+      if (dragState.active) onDrag(e.clientX);
+    });
+
+    /* ---------------- 觸控雙指縮放 / 單指平移 ---------------- */
+    var touchState = { pinching: false, dist0: 0, count0: 0, ratio: 0.5, x0: 0, startBars: 0 };
+
+    function touchDist(t) {
+      var dx = t[0].clientX - t[1].clientX;
+      var dy = t[0].clientY - t[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    cv.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 2) {
+        // 進入雙指模式：取消 hover，記下起始距離與當前根數
+        var g = state.chartGeom;
+        if (!g) return;
+        var total = g.fullLen;
+        touchState.pinching = true;
+        touchState.dist0 = touchDist(e.touches);
+        touchState.count0 = state.view.count == null ? total : state.view.count;
+        var rect = cv.getBoundingClientRect();
+        var midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        touchState.ratio = Math.max(0, Math.min(1, (midX - g.padL) / g.plotW));
+        state.hoverIndex = null;
+        tip.hidden = true;
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    cv.addEventListener('touchmove', function (e) {
+      if (touchState.pinching && e.touches.length === 2) {
+        var d = touchDist(e.touches);
+        if (touchState.dist0 > 0) {
+          // 手指張開 = 放大 = 根數變少
+          var factor = touchState.dist0 / d;
+          var total = seriesTotal();
+          var next = Math.round(touchState.count0 * factor);
+          next = Math.max(MIN_BARS, Math.min(total, next));
+          if (next !== (state.view.count == null ? total : state.view.count)) {
+            state.view.count = next >= total ? null : next;
+            clampView();
+            drawChart();
+            updateZoomUi();
+          }
+        }
+        e.preventDefault();
+        return;
+      }
+      if (e.touches.length === 1 && state.view.count != null) {
+        // 已放大時，單指左右滑動 = 平移（未放大時保留原本的 hover 行為）
+        if (!touchState.panning) {
+          touchState.panning = true;
+          touchState.x0 = e.touches[0].clientX;
+          touchState.startBars = state.view.start || 0;
+        }
+        var dx = e.touches[0].clientX - touchState.x0;
+        if (Math.abs(dx) > 6) {
+          var g = state.chartGeom;
+          if (g) {
+            state.view.start = touchState.startBars - Math.round(dx / g.slot);
+            clampView();
+            drawChart();
+            updateZoomUi();
+          }
+          e.preventDefault();
+          return;
+        }
+      }
+      if (e.touches[0]) { onMove(e.touches[0].clientX, e.touches[0].clientY); }
+    }, { passive: false });
+
+    cv.addEventListener('touchend', function () {
+      touchState.pinching = false;
+      touchState.panning = false;
+      // 保留十字線與資訊（不設 timeout）
+    });
+
+    /**
+     * 行動端：點按後「釘住」，不自動消失。
+     * 舊版 touchend 於 1200ms 後自動隱藏，與「釘住」語義衝突，已移除。
+     * 解除方式：點圖表外（document 層監聽）或再次點同一根。
+     */
+    var touchPinned = false;
+    cv.addEventListener('touchstart', function (e) {
+      if (e.touches[0] && e.touches.length === 1) {
+        touchPinned = true;
+        // 單指點按也要立刻顯示該根資訊（不能只依賴 touchmove，
+        // 否則「點一下」這種最常見的操作反而不出資訊）
+        if (state.view.count == null) onMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    }, { passive: true });
+    document.addEventListener('touchstart', function (e) {
+      if (touchPinned && !cv.contains(e.target)) {
+        touchPinned = false;
+        state.hoverIndex = null;
+        if (infoBar) infoBar.hidden = true;
+        drawChart();
+      }
+    }, { passive: true });
   }
 
   /* ==================== 通知 ==================== */
@@ -1635,6 +2722,16 @@
       setStatus('就緒');
     });
 
+    // 詳情頁返回：回到選股結果（若先前是從選股頁點進來）
+    var back = $('detailBack');
+    if (back) {
+      back.addEventListener('click', function () {
+        // 有歷史紀錄就回上一頁（保留篩選結果與捲動位置），否則退回選股頁
+        if (history.length > 1 && /^#\/detail\//.test(location.hash)) history.back();
+        else SA.navigate('#/screen');
+      });
+    }
+
     Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (b) {
       b.addEventListener('click', function () {
         input.value = b.dataset.symbol;
@@ -1648,8 +2745,52 @@
         var key = b.dataset.overlay;
         state.overlays[key] = !state.overlays[key];
         b.classList.toggle('active', state.overlays[key]);
+        // 手動調整圖層後即離開模式預設（模式按鈕不再高亮）
+        clearModeActive();
         drawChart();
       });
+    });
+
+    /**
+     * A1：模式切換。
+     * 模式是「圖層組合的預設」，使用者手動改圖層後即視為自訂，
+     * 模式按鈕取消高亮——避免介面顯示「結構模式」但實際已不符。
+     */
+    Array.prototype.forEach.call(document.querySelectorAll('.mode-btn'), function (b) {
+      b.addEventListener('click', function () {
+        applyMode(b.dataset.mode);
+      });
+    });
+
+    /* ---------------- 時間區間切換 ---------------- */
+    Array.prototype.forEach.call(document.querySelectorAll('.range-btn'), function (b) {
+      b.addEventListener('click', function () {
+        if (state.klineLoading) return;
+        applyRange(b.dataset.range);
+      });
+    });
+
+    /* ---------------- 縮放 / 平移控制 ---------------- */
+    var zoomIn = $('zoomIn'), zoomOut = $('zoomOut');
+    var panLeft = $('panLeft'), panRight = $('panRight'), zoomReset = $('zoomReset');
+
+    if (zoomIn) zoomIn.addEventListener('click', function () { zoomAt(0.5, 1 / 1.35); });
+    if (zoomOut) zoomOut.addEventListener('click', function () { zoomAt(0.5, 1.35); });
+    if (zoomReset) zoomReset.addEventListener('click', resetZoom);
+    if (panLeft) panLeft.addEventListener('click', function () { panBy(-Math.round((state.view.count || 0) * 0.5)); });
+    if (panRight) panRight.addEventListener('click', function () { panBy(Math.round((state.view.count || 0) * 0.5)); });
+
+    // 鍵盤：+/- 縮放、方向鍵平移、0 重置。僅在圖表聚焦時生效，
+    // 避免搶走輸入框的方向鍵行為。
+    document.addEventListener('keydown', function (e) {
+      if (!state.data) return;
+      var cv = $('priceChart');
+      if (!cv || document.activeElement !== cv) return;
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomAt(0.5, 1 / 1.35); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomAt(0.5, 1.35); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); panBy(-Math.max(1, Math.round((state.view.count || 0) * 0.2))); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); panBy(Math.max(1, Math.round((state.view.count || 0) * 0.2))); }
+      else if (e.key === '0') { e.preventDefault(); resetZoom(); }
     });
 
     var rt;
@@ -1686,14 +2827,64 @@
     registerServiceWorker();
     maybeShowIOSTip();
 
-    // 支援 ?symbol= 直接查詢（方便分享與 Power BI 連結）
+    /**
+     * 路由註冊（common.js 提供）。
+     *
+     * predict：K 線預測頁，不自動查詢（顯示歡迎區）
+     * detail ：詳情頁，依 hash 帶入的代碼自動查詢並顯示返回列
+     *
+     * 兩者共用同一份結果區塊，差別只在「有沒有返回列」與是否自動查詢。
+     */
+    SA.onRoute({
+      onPredict: function () {
+        $('detailBar').hidden = true;
+        document.body.classList.remove('detail-mode');
+        // 從詳情頁返回時保留已載入的結果，不清空（使用者會期待畫面還在）
+        setStatus(state.data ? '已更新' : '就緒', state.data ? 'ok' : null);
+      },
+      onDetail: function (symbol) {
+        $('detailBar').hidden = false;
+        document.body.classList.add('detail-mode');
+        if (!symbol) {
+          SA.navigate('#/predict');
+          return;
+        }
+        // 麵包屑要說清楚「現在在看哪一檔」，否則從選股結果點進來後
+        // 使用者無從確認自己點的是不是那一列。
+        var crumb = $('detailCrumb');
+        if (crumb) crumb.textContent = symbol + '　個股詳情';
+        // 已經在看同一檔就不重複查詢（例如從選股頁點進來後再按上一頁）
+        if (state.data && state.data.meta && state.data.meta.symbol.toUpperCase() === symbol.toUpperCase()) {
+          return;
+        }
+        $('symbolInput').value = symbol;
+        $('clearBtn').hidden = false;
+        analyze(symbol);
+      },
+    });
+
+    // 支援 ?symbol= 直接查詢（分享連結 / Power BI 連結）。
+    // 這是既有契約：帶 symbol 進來就自動查，且視為詳情模式。
     var params = new URLSearchParams(location.search);
     var sym = params.get('symbol');
     if (sym) {
       $('symbolInput').value = sym;
       $('clearBtn').hidden = false;
+      // 這條路徑不經過 router，所以要自己把詳情模式的 UI 狀態補上
+      $('detailBar').hidden = false;
+      document.body.classList.add('detail-mode');
+      var crumb0 = $('detailCrumb');
+      if (crumb0) crumb0.textContent = sym + '　個股詳情';
+      // 先手動切到 detail 路由，再由 router 觸發查詢（避免重複請求）
+      if (!/^#\/detail\//.test(location.hash)) {
+        location.replace('#/detail/' + encodeURIComponent(sym));
+      }
       analyze(sym);
+    } else {
+      SA.startRouter();
     }
+
+    if (sym) SA.startRouter();
 
     api('/api/health').then(function () { setStatus('就緒', 'ok'); })
       .catch(function () { setStatus('服務未連線', 'err'); });
