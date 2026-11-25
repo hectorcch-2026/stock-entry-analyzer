@@ -16,10 +16,29 @@ import { chromium, devices } from 'playwright';
 
 const SHARE_URL = process.env.BASE_URL;
 if (!SHARE_URL) {
-  console.error('請設定 BASE_URL，例如：\n  BASE_URL="https://xxx.app.workbuddy.host/?sharecode=XXXX" node tests/e2e-deployed.mjs');
+  console.error(
+    '請設定 BASE_URL，例如：\n' +
+      '  BASE_URL="https://xxx.app.workbuddy.host/?sharecode=XXXX" node tests/e2e-deployed.mjs\n' +
+      '  BASE_URL="https://xxx.onrender.com/" node tests/e2e-deployed.mjs'
+  );
   process.exit(1);
 }
 const ORIGIN = new URL(SHARE_URL).origin;
+
+// 是否為 WorkBuddy 分享式託管（帶 ?sharecode=，需 __wb_rsc cookie 授權）。
+// Render / Railway 等一般 PaaS 沒有這層機制，公開即可直接存取。
+const IS_SHARE_GATED = /[?&]sharecode=/.test(SHARE_URL);
+
+/**
+ * 在 BASE_URL 上附加查詢參數。
+ * 不可直接字串相加 `&symbol=`——BASE_URL 結尾常是 "/"，會產生 "/&symbol=AAPL"，
+ * URL 解析後 searchParams 取不到值，頁面就不會自動查詢（曾導致 3 項誤報）。
+ */
+function withQuery(url, key, value) {
+  const u = new URL(url);
+  u.searchParams.set(key, value);
+  return u.toString();
+}
 
 const results = [];
 const pass = (n, d = '') => { results.push({ ok: true, n, d }); console.log(`  ✓ ${n}${d ? ' — ' + d : ''}`); };
@@ -65,9 +84,13 @@ const nav = await page.goto(SHARE_URL, { waitUntil: 'networkidle', timeout: 6000
 nav.status() === 200 ? pass('HTTPS 首頁載入成功', `HTTP ${nav.status()}`) : fail('首頁載入失敗', `HTTP ${nav.status()}`);
 
 const cookies = await ctx.cookies();
-cookies.some((c) => c.name === '__wb_rsc')
-  ? pass('已取得分享授權 cookie', cookies.find((c) => c.name === '__wb_rsc').name)
-  : fail('未取得分享授權 cookie');
+if (IS_SHARE_GATED) {
+  cookies.some((c) => c.name === '__wb_rsc')
+    ? pass('已取得分享授權 cookie', cookies.find((c) => c.name === '__wb_rsc').name)
+    : fail('未取得分享授權 cookie');
+} else {
+  pass('無需分享授權（公開 PaaS 網域）', ORIGIN);
+}
 
 // 之後所有請求改用 context.request —— 與瀏覽器共用 cookie jar
 const api = ctx.request;
@@ -141,9 +164,7 @@ console.log('\n[B] 公網 API 端點\n');
 
 /* ==================== [C] 前端在公網的實際行為 ==================== */
 console.log('\n[C] 前端線上行為 — iPhone 獨立模式\n');
-await page.goto(`${SHARE_URL}&symbol=AAPL`.replace('?sharecode=', '?sharecode=').replace(/[&?]symbol=/, (m) => m), { waitUntil: 'networkidle', timeout: 60000 }).catch(async () => {
-  await page.goto(`${SHARE_URL}${SHARE_URL.includes('?') ? '&' : '?'}symbol=AAPL`, { waitUntil: 'networkidle', timeout: 60000 });
-});
+await page.goto(withQuery(SHARE_URL, 'symbol', 'AAPL'), { waitUntil: 'networkidle', timeout: 60000 });
 await page.waitForSelector('#result:not([hidden])', { timeout: 60000 }).catch(() => {});
 await page.waitForTimeout(3600);
 
@@ -242,33 +263,45 @@ console.log('\n[E] Service Worker 與離線快取\n');
   // 離線提示條由 app.js 的 bindConnectionState() 依 navigator.onLine 決定。
   // 公網上 SW 需先接管、app.js 需先執行，時序比本地慢，故輪詢等待而非只讀一次。
   const off = await page.evaluate(async () => {
-    const deadline = Date.now() + 8000;
+    // 先等 DOM 就緒並等 app.js 執行完（它會建立 offline 監聽並檢查 navigator.onLine）
+    if (document.readyState !== 'complete') {
+      await new Promise((r) => {
+        if (document.readyState === 'complete') return r();
+        window.addEventListener('load', r, { once: true });
+        setTimeout(r, 3000);
+      });
+    }
+    const deadline = Date.now() + 12000;
     let bar = null;
     while (Date.now() < deadline) {
       const el = document.getElementById('offlineBar');
-      if (el && !el.hidden) {
-        bar = { hidden: false, text: document.getElementById('offlineText')?.textContent || '' };
-        break;
+      if (el) {
+        if (!el.hidden) {
+          bar = { hidden: false, text: document.getElementById('offlineText')?.textContent || '' };
+          break;
+        }
+        // 元素存在但還隱藏：可能 app.js 尚未執行完，再等一下
+        bar = { hidden: true, text: '' };
       }
       await new Promise((r) => setTimeout(r, 250));
     }
-    if (!bar) {
-      const el = document.getElementById('offlineBar');
-      bar = el ? { hidden: el.hidden, text: document.getElementById('offlineText')?.textContent || '' } : null;
-    }
     return {
+      readyState: document.readyState,
       hasApp: !!document.getElementById('symbolInput'),
       onLine: navigator.onLine,
       swControlled: !!navigator.serviceWorker?.controller,
       offlineBar: !!bar && !bar.hidden,
       barText: bar?.text || '',
     };
-  }).catch(() => ({ hasApp: false, offlineBar: false }));
+  }).catch(() => ({ hasApp: false, offlineBar: false, readyState: 'error' }));
 
   ok && off.hasApp ? pass('斷網後仍可載入介面（快取生效）') : fail('斷網後無法載入', JSON.stringify(off));
   off.offlineBar
     ? pass('斷網時顯示離線提示條', off.barText.slice(0, 40))
-    : fail('斷網未提示使用者', `onLine=${off.onLine} swControlled=${off.swControlled}`);
+    : fail(
+        '斷網未提示使用者',
+        `readyState=${off.readyState} onLine=${off.onLine} swControlled=${off.swControlled} hasApp=${off.hasApp}`
+      );
   await ctx.setOffline(false);
   offlinePhase = false;
 }
