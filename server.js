@@ -703,7 +703,11 @@ const server = http.createServer(async (req, res) => {
         const d = await analyzer.analyze(norm.value);
         ctx = {
           price: d.meta.price, currency: d.meta.currency,
-          priceAsOf: d.meta.asOf || null, name: d.meta.name,
+          // meta 沒有 asOf 欄位（曾誤寫成 d.meta.asOf，導致 priceAsOf 恆為 null）。
+          // 報價時點應取 marketTime：三個資料源（yahoo/eastmoney/tencent）都統一為毫秒時間戳。
+          // 轉成 YYYY-MM-DD，與其他 evidence 的 asOf 格式一致（如 CPI 的 2026-10-01）。
+          priceAsOf: d.meta.marketTime ? new Date(d.meta.marketTime).toISOString().slice(0, 10) : null,
+          name: d.meta.name,
         };
       } catch (e) {
         ctx = { price: null, note: `無法取得股價（${e.message}），本益比將不計算` };
