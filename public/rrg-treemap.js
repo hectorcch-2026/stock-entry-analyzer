@@ -824,6 +824,9 @@
   function enter() {
     cacheEl();
     if (!el.canvas) return;
+    /* 告訴 index.html 的兜底計時器「這裡已經接手了」，
+       否則 8 秒後它會誤判為載入失敗而蓋掉正常內容。 */
+    if (el.wrap && el.wrap.setAttribute) el.wrap.setAttribute('data-ready', '1');
     if (!state.bound) {
       bindEvents();
       state.bound = true;

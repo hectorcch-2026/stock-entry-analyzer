@@ -461,6 +461,20 @@ t('D10 未知週期回退到 m1（不崩潰）', () => {
   assert.strictEqual(d.period, 'm1');
 });
 
+/* 線上實測抓到的語意錯誤：把 11 個版塊各自的覆蓋率相加得到 682.84%，
+   但每檔 ETF 是獨立的 100%，跨版塊相加毫無意義，且極易被誤讀。 */
+t('D16 權重覆蓋率是平均值，不可跨版塊相加超過 100%', () => {
+  const d = tm.build(mkInput({ perSector: 2 }));
+  const v = d.totals.weightCoveredAvgPct;
+  assert.ok(typeof v === 'number' && isFinite(v), '缺少 weightCoveredAvgPct');
+  assert.ok(v > 0 && v <= 100,
+    `覆蓋率 ${v} 超出 0~100，應為各版塊覆蓋率的平均而非總和`);
+  /* 平均值必須落在各版塊自身覆蓋率的區間內 */
+  const per = d.groups.map((g) => g.weightPct);
+  assert.ok(v >= Math.min(...per) - 0.01 && v <= Math.max(...per) + 0.01,
+    `平均 ${v} 不在各版塊 ${Math.min(...per)}~${Math.max(...per)} 之間`);
+});
+
 t('D11 回傳包含 sampling 說明（面積不是完整版塊市值）', () => {
   const d = tm.build(mkInput());
   assert.ok(d.sampling, '缺少 sampling 區塊');
@@ -643,11 +657,15 @@ t('E13 Service Worker 已升版並納入新資源', () => {
 });
 
 t('E14 index.html 引入 rrg-treemap.js（僅一次）', () => {
-  const n = (html.match(/rrg-treemap\.js/g) || []).length;
-  assert.strictEqual(n, 1, `引入 ${n} 次`);
+  /* 只計 <script src="..."> 的實際引入，不要把註解或說明文字算進來
+     （否則在註解提到檔名就會誤判成重複引入） */
+  const tags = html.match(/<script[^>]+src=["'][^"']*rrg-treemap\.js[^"']*["'][^>]*>/g) || [];
+  assert.strictEqual(tags.length, 1, `引入 ${tags.length} 次`);
   /* 必須在 rrg-client.js 之後（前者依賴後者建立的路由掛鉤） */
-  assert.ok(html.indexOf('rrg-client.js') < html.indexOf('rrg-treemap.js'),
-    '載入順序錯誤：rrg-treemap.js 應在 rrg-client.js 之後');
+  const iClient = html.indexOf('src="/rrg-client.js"');
+  const iTreemap = html.indexOf('src="/rrg-treemap.js"');
+  assert.ok(iClient > 0 && iTreemap > 0, '找不到 script 標籤');
+  assert.ok(iClient < iTreemap, '載入順序錯誤：rrg-treemap.js 應在 rrg-client.js 之後');
 });
 
 t('E15 端點存在且驗證週期參數', () => {
@@ -688,6 +706,14 @@ t('E20 tooltip 定位以視窗為約束（不被容器裁切）', () => {
 
 /* 線上實測到的故障：Render 上 crumb 被限流 → 110 檔市值全缺。
    面積因此退化成權重。若前端不說明，使用者會把面積讀成市值。 */
+/* 實測到的風險：rrg-treemap.js 若載入失敗，卡片會永遠停在「載入中…」，
+   使用者完全看不出發生什麼事。必須有兜底提示。 */
+t('E23 圖表程式載入失敗時有兜底提示（不可永遠載入中）', () => {
+  assert.ok(/data-ready/.test(html), 'index.html 缺少 data-ready 就緒標記');
+  assert.ok(/圖表程式未能載入|未能載入/.test(html), '缺少載入失敗的兜底文案');
+  assert.ok(/data-ready/.test(js), '前端未設定就緒標記，兜底會誤觸發');
+});
+
 t('E21 面積非市值時，前端必須明說', () => {
   assert.ok(/areaBasis/.test(js), '前端未讀取 areaBasis');
   assert.ok(/'weight'/.test(js) || /"weight"/.test(js), '前端未處理 weight 退化情形');

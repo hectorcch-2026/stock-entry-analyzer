@@ -972,6 +972,25 @@
         </div>
       </div>
 
+      <script>
+        /* 兜底：若 Treemap 腳本沒載入成功（CDN/快取/網路故障），
+           卡片會永遠停在「載入中…」，使用者看不出發生什麼事。
+           這裡在 8 秒後檢查是否有人接手；沒有就顯示可重試的錯誤。
+           正常情況該腳本會在數百毫秒內把 data-ready 設為 1。 */
+        (function () {
+          var DEADLINE = 8000;
+          setTimeout(function () {
+            var meta = document.getElementById('rrgTmMeta');
+            var wrap = document.getElementById('rrgTmWrap');
+            if (!meta || !wrap || wrap.getAttribute('data-ready') === '1') return;
+            meta.className = 'rrg-tm-meta err';
+            meta.innerHTML = '圖表程式未能載入 <span class="rrg-tm-err-hint">' +
+              '可能是網路或快取問題</span> <button type="button" class="rrg-tm-retry" ' +
+              'onclick="location.reload()">重新載入</button>';
+          }, DEADLINE);
+        })();
+      </script>
+
       <!-- 圖例：顏色 ↔ 漲跌幅 -->
       <div class="rrg-tm-legend" id="rrgTmLegend" aria-label="顏色圖例"></div>
 
