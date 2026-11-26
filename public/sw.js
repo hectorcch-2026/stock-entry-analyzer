@@ -35,7 +35,7 @@
 // v1.0.7：RRG 新增版塊熱力圖 Treemap（新增 rrg-treemap.js，
 //         index.html / styles.css / rrg-client.js 皆有變動，
 //         並新增 /api/rrg/treemap 端點），必須再升版。
-const VERSION = 'v1.0.7';
+const VERSION = 'v1.0.8';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

@@ -641,8 +641,15 @@
     bits.push('<span class="rrg-tm-down">跌 ' + fell + '</span>');
     if (flat) bits.push('平 ' + flat);
     if (nodata) bits.push('<span class="rrg-tm-nd">無資料 ' + nodata + '</span>');
+    /* 面積若不是市值，必須說清楚——
+       否則使用者會理所當然把面積讀成市值，而那是錯的。 */
+    if (d.areaBasis === 'weight') {
+      bits.push('<span class="rrg-tm-warn">市值暫不可用，面積暫以基金權重代替</span>');
+    } else if (d.areaBasis === 'equal') {
+      bits.push('<span class="rrg-tm-warn">市值與權重皆不可用，各格等大</span>');
+    }
     el.meta.innerHTML = bits.join(' · ');
-    el.meta.className = 'rrg-tm-meta';
+    el.meta.className = 'rrg-tm-meta' + (d.areaBasis && d.areaBasis !== 'marketCap' ? ' warn' : '');
   }
 
   /* ---------------- 載入 ---------------- */

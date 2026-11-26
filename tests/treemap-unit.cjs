@@ -468,6 +468,48 @@ t('D11 回傳包含 sampling 說明（面積不是完整版塊市值）', () => 
   assert.ok(d.sampling.perSector > 0);
 });
 
+/* ---- 市值全體缺失的退化（雲端 crumb 被限流時會發生） ----
+   這是實測過的線上故障：Render 上 getcrumb 持續 429，
+   導致 110 檔全部 noCap，舊版會讓每格面積都等於同一個 floor，
+   畫出一張「每格一樣大」卻看起來正常的圖。 */
+t('D13 市值全缺時改用權重當面積，不可全體等大', () => {
+  const input = mkInput();
+  for (const k of Object.keys(input.caps)) input.caps[k] = { marketCap: null, name: k };
+  const d = tm.build(input);
+
+  assert.strictEqual(d.areaBasis, 'weight', '應標示面積來源為權重');
+  assert.strictEqual(d.totals.marketCap, 0);
+
+  /* 關鍵：不同股票的面積必須不同（依權重），不能全部同值 */
+  const all = [].concat(...d.groups.map((g) => g.leaves));
+  const areas = all.map((l) => l.areaValue);
+  assert.ok(areas.every((a) => a > 0), '每格仍要有面積');
+  const uniq = new Set(areas.map((a) => a.toFixed(6)));
+  assert.ok(uniq.size > 1, `面積全部相同（${uniq.size} 種），等於失去面積語意`);
+
+  /* 面積比例要等於權重比例 */
+  const a = all.find((l) => l.ticker === 'NVDA');
+  const b = all.find((l) => l.ticker === 'AAPL');
+  const ratio = a.areaValue / b.areaValue;
+  const wRatio = a.weight / b.weight;
+  assert.ok(Math.abs(ratio - wRatio) < 1e-9, `面積比 ${ratio} 與權重比 ${wRatio} 不符`);
+});
+
+t('D14 市值正常時 areaBasis 為 marketCap', () => {
+  const d = tm.build(mkInput());
+  assert.strictEqual(d.areaBasis, 'marketCap');
+});
+
+t('D15 市值與權重皆缺時才退到 equal', () => {
+  const input = mkInput();
+  for (const k of Object.keys(input.caps)) input.caps[k] = { marketCap: null, name: k };
+  for (const sec of Object.keys(input.holdingsBySector)) {
+    for (const row of input.holdingsBySector[sec].holdings) row.weight = 0;
+  }
+  const d = tm.build(input);
+  assert.strictEqual(d.areaBasis, 'equal');
+});
+
 t('D12 版塊標籤沿用 sectorMeta', () => {
   const d = tm.build(mkInput());
   const xlk = d.groups.find((g) => g.key === 'XLK');
@@ -642,6 +684,25 @@ t('E20 tooltip 定位以視窗為約束（不被容器裁切）', () => {
   assert.ok(js.includes('clientWidth') && js.includes('clientHeight'),
     'tooltip 未考慮視窗邊界');
   assert.ok(/position:\s*fixed/.test(css), 'tooltip 應為 fixed 定位');
+});
+
+/* 線上實測到的故障：Render 上 crumb 被限流 → 110 檔市值全缺。
+   面積因此退化成權重。若前端不說明，使用者會把面積讀成市值。 */
+t('E21 面積非市值時，前端必須明說', () => {
+  assert.ok(/areaBasis/.test(js), '前端未讀取 areaBasis');
+  assert.ok(/'weight'/.test(js) || /"weight"/.test(js), '前端未處理 weight 退化情形');
+  assert.ok(/權重/.test(js), '缺少「以權重代替」的提示文字');
+});
+
+t('E22 市值抓取有無 crumb 的備援（不可只依賴 v7/quote）', () => {
+  const svcSrc = fs.readFileSync(path.join(ROOT, 'lib/treemap-service.js'), 'utf8');
+  assert.ok(/fetchCapsResilient/.test(svcSrc), '缺少韌性抓取函式');
+  assert.ok(/ordinarySharesNumber|trailingMarketCap/.test(svcSrc),
+    '缺少無 crumb 的市值來源');
+  /* crumb 正則必須允許 base64 字元的 '/' 與 '+'，
+     否則有效的 crumb 會被誤丟（實測 "ewxKRKH/qVL"） */
+  assert.ok(/A-Za-z0-9\._\\-\+\/|A-Za-z0-9._\\-+\//.test(svcSrc),
+    'crumb 驗證正則未允許 base64 字元');
 });
 
 /* ============================================================
