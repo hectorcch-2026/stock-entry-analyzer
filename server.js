@@ -1146,76 +1146,67 @@ const server = http.createServer(async (req, res) => {
         catch (e) { return { ms: Date.now() - t0, error: e.name + ': ' + e.message }; }
       };
 
-      // 1) 取 cookie
-      let cookie = '';
-      out.tests.cookie = await timed(async () => {
-        const r = await fetch('https://fc.yahoo.com/', {
-          headers: { 'User-Agent': UA }, redirect: 'manual', signal: AbortSignal.timeout(6000),
-        });
-        const list = typeof r.headers.getSetCookie === 'function'
-          ? r.headers.getSetCookie() : [r.headers.get('set-cookie')].filter(Boolean);
-        cookie = list.map((c) => String(c).split(';')[0]).join('; ');
-        return { status: r.status, n: list.length, len: cookie.length };
-      });
-
-      // 2) crumb 連打 4 次（看 429 是持續還是瞬時）
-      out.tests.crumbRetries = await timed(async () => {
-        const rs = [];
-        for (let i = 0; i < 4; i++) {
-          const host = i % 2 === 0 ? 'query1' : 'query2';
-          const r = await fetch(`https://${host}.finance.yahoo.com/v1/test/getcrumb`, {
-            headers: { 'User-Agent': UA, Cookie: cookie, Accept: '*/*' },
-            signal: AbortSignal.timeout(6000),
-          });
-          const t = (await r.text()).trim();
-          rs.push({ host, status: r.status, ok: /^[\w.\-]{4,24}$/.test(t), head: t.slice(0, 20) });
-          if (rs[rs.length - 1].ok) break;
-          await new Promise((s) => setTimeout(s, 400));
-        }
-        return { attempts: rs };
-      });
-
-      const crumbTry = out.tests.crumbRetries.attempts || [];
-      const crumb = crumbTry.find((x) => x.ok) ? 'GOT' : '';
-
-      // 3) 無 crumb 直接打 v7/quote
-      out.tests.quoteNoCrumb = await timed(async () => {
-        const r = await fetch('https://query1.finance.yahoo.com/v7/finance/quote?symbols=AAPL', {
-          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
-          signal: AbortSignal.timeout(6000),
-        });
+      const probe = (url, headers, pick) => timed(async () => {
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
         const t = await r.text();
-        return { status: r.status, len: t.length, head: t.slice(0, 160) };
+        let j = null; try { j = JSON.parse(t); } catch {}
+        return { status: r.status, len: t.length, picked: pick ? pick(j, t) : null, head: t.slice(0, 130) };
       });
 
-      // 4) v10 quoteSummary 的 price 模組（另一個可能來源）
-      out.tests.quoteSummary = await timed(async () => {
-        const r = await fetch('https://query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=price', {
-          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
-          signal: AbortSignal.timeout(6000),
+      const base = { 'User-Agent': UA, Accept: 'application/json' };
+
+      // A) 完整瀏覽器式 cookie（先逛首頁，拿 A1/A3，再換 crumb）
+      out.tests.fullCookie = await timed(async () => {
+        const r1 = await fetch('https://finance.yahoo.com/quote/AAPL/', {
+          headers: { 'User-Agent': UA, Accept: 'text/html' },
+          redirect: 'follow', signal: AbortSignal.timeout(9000),
         });
-        const t = await r.text();
-        let cap = null;
-        try { cap = JSON.parse(t)?.quoteSummary?.result?.[0]?.price?.marketCap?.raw ?? null; } catch {}
-        return { status: r.status, len: t.length, cap, head: t.slice(0, 120) };
+        const l1 = typeof r1.headers.getSetCookie === 'function' ? r1.headers.getSetCookie() : [];
+        const jar = l1.map((c) => String(c).split(';')[0]).filter(Boolean);
+        const html = await r1.text();
+        // 頁面若含市值，直接抓
+        const m = html.match(/"marketCap"\s*:\s*\{[^}]*"raw"\s*:\s*(\d+)/);
+        return {
+          status: r1.status, cookies: jar.length,
+          names: jar.map((c) => c.split('=')[0]).join(','),
+          htmlCap: m ? Number(m[1]) : null, htmlLen: html.length,
+        };
       });
 
-      // 5) v8/chart 的 meta 是否有 marketCap（已知沒有，但要確認可用欄位）
-      out.tests.chartMeta = await timed(async () => {
-        const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1d', {
-          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
-          signal: AbortSignal.timeout(6000),
+      // B) 各種不需要 crumb 的市值端點
+      out.tests.v6quote = await probe('https://query1.finance.yahoo.com/v6/finance/quote?symbols=AAPL',
+        base, (j) => j?.quoteResponse?.result?.[0]?.marketCap ?? null);
+
+      out.tests.fundamentalsTs = await probe(
+        'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/AAPL?symbol=AAPL&type=trailingMarketCap,quarterlyMarketCap,annualMarketCap&period1=1700000000&period2=1800000000',
+        base, (j) => {
+          const res = j?.timeseries?.result || [];
+          const r = res.find((x) => x.trailingMarketCap) || res.find((x) => x.quarterlyMarketCap);
+          return r ? JSON.stringify(r).slice(0, 200) : null;
         });
-        const j = await r.json();
-        const meta = j?.chart?.result?.[0]?.meta || {};
-        return { status: r.status, keys: Object.keys(meta).join(','), marketCap: meta.marketCap ?? null };
-      });
 
-      // 6) 帶 crumb 打 v7/quote（若上面拿到了）
-      out.tests.quoteWithCrumb = { skipped: !crumb };
+      out.tests.sharesTs = await probe(
+        'https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/AAPL?symbol=AAPL&type=annualOrdinarySharesNumber,quarterlyOrdinarySharesNumber&period1=1600000000&period2=1800000000',
+        base, (j) => JSON.stringify(j?.timeseries?.result || []).slice(0, 220));
 
-      out.tests.sessionState = { hasCookie: !!cookie, crumb };
-      out.tests.serviceDiag = treemapService.getCapDiag();
+      out.tests.chartPrice = await probe(
+        'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1d',
+        base, (j) => {
+          const m = j?.chart?.result?.[0]?.meta || {};
+          return { price: m.regularMarketPrice, currency: m.currency, name: m.longName || m.shortName };
+        });
+
+      // C) 第三方來源（無需金鑰）
+      out.tests.stockanalysis = await probe('https://stockanalysis.com/api/symbol/s/AAPL/overview',
+        { 'User-Agent': UA, Accept: 'application/json' },
+        (j) => {
+          const d = j?.data || {};
+          return { marketCap: d.marketCap ?? null, keys: Object.keys(d).join(',').slice(0, 160) };
+        });
+
+      out.tests.stooq = await probe('https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv',
+        { 'User-Agent': UA }, (j, t) => t.slice(0, 120));
+
       return sendJSON(res, 200, out);
     }
 
