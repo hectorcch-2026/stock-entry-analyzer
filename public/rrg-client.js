@@ -121,6 +121,11 @@
       /* 持股面板依賴主資料的版塊清單，必須在主資料回來後才決定要看哪個版塊 */
       renderHoldSectorSelect();
       loadHoldings();
+      /* 版塊輪動 × 宏觀：必須在 syncControlsFromResponse 之後才觸發，
+         因為它要讀控制列的實際值當參數。順序錯了就會用上一次的參數去算，
+         導致「圖上是週線、AI 講的是月線」這種對不上的情況。
+         失敗不影響 RRG 主圖，故不接 .catch 的錯誤處理。 */
+      if (window.NewsAi && window.NewsAi.loadMacroAi) window.NewsAi.loadMacroAi();
       SA.setStatus('已更新 ' + (d.asOf || ''), 'ok');
     }).catch(function (err) {
       if (mySeq !== state.seq) return;
@@ -140,6 +145,9 @@
         el.holdBody.innerHTML = '<tr><td colspan="7" class="rrg-table-empty">' +
           '待上方圖表恢復後才會載入持股</td></tr>';
       }
+      /* 宏觀區塊同樣不能停在「載入中」：它靠同一支上游矩陣，
+         這裡掛掉它一定也拿不到資料。直接顯示原因，避免無限轉圈。 */
+      if (window.NewsAi && window.NewsAi.failMacroAi) window.NewsAi.failMacroAi(desc);
       SA.setStatus('載入失敗', 'err');
     });
   }

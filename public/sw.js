@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Service Worker — 買入位與技術位分析系統
+ * Service Worker — 股票量化分析專業介面
  *
  * 快取策略（依資源性質區分，這是本檔案最重要的設計）：
  *
@@ -35,7 +35,15 @@
 // v1.0.7：RRG 新增版塊熱力圖 Treemap（新增 rrg-treemap.js，
 //         index.html / styles.css / rrg-client.js 皆有變動，
 //         並新增 /api/rrg/treemap 端點），必須再升版。
-const VERSION = 'v1.0.9';
+// v1.0.10：新增「新聞與 AI 分析」（個股頁）與「版塊輪動 × 宏觀經濟」
+//          （RRG 頁）兩個區塊，新增 news-ai.js，且 index.html /
+//          styles.css / app.js / rrg-client.js 皆有變動，
+//          並新增 /api/stock-news-ai 與 /api/sector-macro-ai 兩支端點。
+// v1.0.11：專案更名為「股票量化分析專業介面」（index.html / manifest
+//          / sw.js 標題皆有變動），且「個股財報」由宏觀模塊移至個股模塊
+//          （index.html / styles.css / common.js / macro.js / app.js 皆改，
+//          新增 stock-fin.js），必須升版否則舊殼會蓋掉新頁。
+const VERSION = 'v1.0.11';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
@@ -54,6 +62,8 @@ const SHELL_ASSETS = [
   '/macro.js',
   '/rrg-client.js',
   '/rrg-treemap.js',
+  '/news-ai.js',
+  '/stock-fin.js',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -255,7 +265,7 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
-  const title = payload.title || '買入位分析 · 價格異動';
+  const title = payload.title || '股票量化分析 · 價格異動';
   const options = {
     body: payload.body || '',
     icon: '/icons/icon-192.png',

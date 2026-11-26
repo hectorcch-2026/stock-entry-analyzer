@@ -258,9 +258,14 @@ check('全程無 JS 錯誤', errs.length === 0, errs.join(' | '));
 await ctx.close();
 
 /* ============================================================
-   個股：AAPL 財報
+   個股財報：已由宏觀模塊移至個股模塊
+   ------------------------------------------------------------
+   原本這一段在 #/macro/AAPL 上驗財報。財報搬到個股模塊後，
+   正確的驗法是在個股詳情頁 #/detail/AAPL 上驗，並且額外確認
+   「舊網址不會壞」——舊連結要能轉到新位置，而不是停在一個
+   已經被搬走的功能上。
    ============================================================ */
-console.log('\n[桌面] #/macro/AAPL');
+console.log('\n[桌面] 舊路由 #/macro/AAPL → 應轉到 #/detail/AAPL');
 const ctx2 = await b.newContext({ viewport: { width: 1440, height: 900 } });
 const p2 = await ctx2.newPage();
 const errs2 = [];
@@ -268,92 +273,97 @@ p2.on('pageerror', (e) => errs2.push('PAGEERROR: ' + e.message));
 p2.on('console', (m) => { if (m.type() === 'error') errs2.push('CONSOLE: ' + m.text()); });
 
 await p2.goto(`${BASE}/#/macro/AAPL`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-await p2.waitForSelector('#viewMacro:not([hidden])', { timeout: 30000 });
-// 關鍵：這一頁會「先載宏觀（18 序列）當背景，再載個股財報」。
-// 若只等表格出現資料列，會抓到宏觀那 18 列就往下跑，
-// 而財報還沒回來 —— 這是測試自己的競態，不是頁面的問題。
-// 正確做法：等到宏觀 state.scope 變成 'symbol'，或等到出現 SEC 來源的列。
+await p2.waitForTimeout(4000);
+
+const redirect = await p2.evaluate(() => ({
+  hash: location.hash,
+  macroVisible: !document.getElementById('viewMacro')?.hidden,
+  chartVisible: !document.getElementById('viewChart')?.hidden,
+}));
+check('舊路由轉到個股詳情頁', /^#\/detail\/AAPL$/i.test(redirect.hash), `實際 ${redirect.hash}`);
+check('轉址後不再停在宏觀頁', redirect.macroVisible === false);
+check('轉址後個股頁可見', redirect.chartVisible === true);
+
+console.log('\n[桌面] #/detail/AAPL 的個股財報卡');
+await p2.goto(`${BASE}/#/detail/AAPL`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+await p2.waitForTimeout(6000);
+
+// 等財報卡畫完：body 顯示且表格有列，或落到明確的空狀態
 await p2.waitForFunction(() => {
-  const st = window.MacroPage && window.MacroPage.state;
-  if (st && st.scope === 'symbol') {
-    const rows = [...document.querySelectorAll('#macroTableBody tr')];
-    return rows.length > 0 && rows.some((r) => r.querySelector('.src-sec'));
+  const body = document.getElementById('stockFinBody');
+  const empty = document.getElementById('stockFinEmpty');
+  const loading = document.getElementById('stockFinLoading');
+  if (loading && !loading.hidden) return false;
+  if (body && !body.hidden) {
+    return document.querySelectorAll('#stockFinTableBody tr').length > 0;
   }
-  return false;
+  return !!empty && !empty.hidden;
 }, { timeout: 90000 }).catch(() => {});
-await p2.waitForTimeout(600);
 
 const a = await p2.evaluate(() => {
-  const rows = [...document.querySelectorAll('#macroTableBody tr')];
-  const cells = rows.map((r) => ({
-    name: r.querySelector('.mt-name')?.textContent?.trim(),
-    val: r.querySelector('.mt-val')?.textContent?.trim(),
-    date: r.querySelector('.mt-date')?.textContent?.trim(),
-    src: r.querySelector('.src-badge')?.textContent?.trim(),
-  }));
+  const rows = [...document.querySelectorAll('#stockFinTableBody tr')];
   return {
-    title: document.getElementById('macroTitle')?.textContent?.trim(),
-    sub: document.getElementById('macroSub')?.textContent?.trim(),
-    count: document.getElementById('macroCount')?.textContent?.trim(),
-    rows: cells,
-    rowCount: cells.length,
+    cardVisible: (() => {
+      const c = document.getElementById('stockFinCard');
+      return !!c && !c.hidden && getComputedStyle(c).display !== 'none';
+    })(),
+    title: document.getElementById('stockFinTitle')?.textContent?.trim(),
+    sub: document.getElementById('stockFinSub')?.textContent?.trim(),
+    loading: !document.getElementById('stockFinLoading')?.hidden,
+    bodyShown: !document.getElementById('stockFinBody')?.hidden,
+    rows: rows.map((r) => ({
+      name: r.querySelector('.mt-name')?.textContent?.trim(),
+      val: r.querySelector('.mt-val')?.textContent?.trim(),
+      date: r.querySelector('.mt-date')?.textContent?.trim(),
+      src: r.querySelector('.mt-src')?.textContent?.trim(),
+    })),
+    meta: document.getElementById('stockFinMeta')?.textContent?.trim(),
     pageOverflowX: document.documentElement.scrollWidth - window.innerWidth,
-    fomcStillShown: !document.getElementById('fomcNext')?.hidden,
-    limits: document.getElementById('macroLimits')?.textContent?.trim().slice(0, 40),
+    macroHasForm: !!document.getElementById('macroSymbolForm'),
   };
 });
 
+check('財報卡在個股頁可見', a.cardVisible === true);
+check('財報卡不在載入中卡死', a.loading === false);
 check('標題顯示公司名與代碼', /AAPL/.test(a.title || '') && /Apple|Inc/.test(a.title || ''), `實際：${a.title}`);
-check('副標說明財報來自 SEC / 宏觀來自 FRED', /SEC/.test(a.sub || '') && /FRED/.test(a.sub || ''), `實際：${a.sub}`);
-check('財報表格有 8 列以上', a.rowCount >= 8, `實際 ${a.rowCount} 列`);
+check('副標說明來自 SEC', /SEC/.test(a.sub || ''), `實際：${a.sub}`);
+check('財報表格有 8 列以上', a.rows.length >= 8, `實際 ${a.rows.length} 列`);
 check('有營收欄位且為 B 級金額', a.rows.some((r) => /營收/.test(r.name || '') && /B$/.test(r.val || '')),
   JSON.stringify(a.rows.slice(0, 2)));
 check('有 ROE 欄位', a.rows.some((r) => /ROE/.test(r.name || '')), '');
 check('有毛利率欄位', a.rows.some((r) => /毛利率/.test(r.name || '')), '');
-check('財報列標為 SEC 來源', a.rows.some((r) => r.src === 'SEC'), JSON.stringify(a.rows.map((r) => r.src)));
+check('財報列標為 SEC 來源', a.rows.some((r) => /SEC/.test(r.src || '')), JSON.stringify(a.rows.map((r) => r.src)));
 check('有宏觀背景列（政策利率／10Y）', a.rows.some((r) => /背景/.test(r.name || '')), '');
-check('宏觀背景列標為 FRED 來源', a.rows.some((r) => /背景/.test(r.name || '') && r.src === 'FRED'), '');
-check('個股頁仍顯示 FOMC 下次會議', a.fomcStillShown === true);
+check('宏觀背景列標為 FRED 來源', a.rows.some((r) => /背景/.test(r.name || '') && /FRED/.test(r.src || '')), '');
+check('財報頁腳有期間與產生時間', /財報期間|產生時間/.test(a.meta || ''), `實際：${a.meta}`);
 check('個股頁無水平溢出', a.pageOverflowX <= 1, `溢出 ${a.pageOverflowX}px`);
+check('宏觀頁已無個股財報輸入框', a.macroHasForm === false);
 
-await p2.screenshot({ path: `${OUT}/macro-aapl.png`, fullPage: true });
-
-/* ---------- 個股 AI 解讀 ---------- */
-await p2.click('.mh-tab[data-mtab="interpret"]');
-await p2.waitForTimeout(700);
-const ai = await p2.evaluate(() => ({
-  cards: document.querySelectorAll('#interpList .interp-card').length,
-  headline: document.querySelector('#interpList .ic-head h3')?.textContent?.trim(),
-  disc: document.getElementById('interpDisc')?.textContent?.trim(),
-  overall: document.querySelector('#interpOverall .io-tag')?.textContent?.trim(),
-}));
-check('個股 AI 解讀有結論', ai.cards >= 3, `實際 ${ai.cards} 條`);
-check('個股解讀首條為成長性（營收）', /營收/.test(ai.headline || ''), `實際：${ai.headline}`);
-check('個股解讀有免責聲明', /不構成.*投資建議/.test(ai.disc || ''), '');
-await p2.screenshot({ path: `${OUT}/macro-aapl-interpret.png`, fullPage: true });
-check('個股流程無 JS 錯誤', errs2.length === 0, errs2.join(' | '));
+await p2.screenshot({ path: `${OUT}/stock-fin-aapl.png`, fullPage: true });
+check('個股財報流程無 JS 錯誤', errs2.length === 0, errs2.join(' | '));
 await ctx2.close();
 
 /* ============================================================
-   港股：不適用（不可報「失敗」）
+   港股：無 SEC 財報 → 顯示「不適用」而非錯誤
    ============================================================ */
-console.log('\n[桌面] #/macro/0700.HK（港股無 SEC 財報）');
+console.log('\n[桌面] #/detail/0700.HK（港股無 SEC 財報）');
 const ctx3 = await b.newContext({ viewport: { width: 1280, height: 800 } });
 const p3 = await ctx3.newPage();
-await p3.goto(`${BASE}/#/macro/0700.HK`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-await p3.waitForSelector('#viewMacro:not([hidden])', { timeout: 30000 });
-await p3.waitForTimeout(6000);
+await p3.goto(`${BASE}/#/detail/0700.HK`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+await p3.waitForTimeout(8000);
 
 const hk = await p3.evaluate(() => ({
-  noticeVisible: !document.getElementById('macroNotice')?.hidden,
-  noticeClass: document.getElementById('macroNotice')?.className,
-  noticeText: document.getElementById('macroNotice')?.textContent?.trim().slice(0, 160),
-  tableText: document.getElementById('macroTableBody')?.textContent?.trim().slice(0, 60),
+  emptyVisible: !document.getElementById('stockFinEmpty')?.hidden,
+  emptyTitle: document.getElementById('stockFinEmptyTitle')?.textContent?.trim(),
+  emptyMsg: document.getElementById('stockFinEmptyMsg')?.textContent?.trim(),
+  loading: !document.getElementById('stockFinLoading')?.hidden,
+  tableText: document.getElementById('stockFinTableBody')?.textContent?.trim().slice(0, 80),
 }));
-check('港股顯示「不適用」提示（非紅色錯誤）', hk.noticeVisible === true && !/mn-error/.test(hk.noticeClass || ''),
-  `class=${hk.noticeClass}`);
-check('提示文字說明原因', (hk.noticeText || '').length > 5, hk.noticeText);
-await p3.screenshot({ path: `${OUT}/macro-hk.png`, fullPage: true });
+check('港股顯示「無財報」提示（非紅色錯誤）', hk.emptyVisible === true,
+  `emptyVisible=${hk.emptyVisible} loading=${hk.loading}`);
+check('提示文字說明原因（不適用，不是失敗）', (hk.emptyMsg || '').length > 5, hk.emptyMsg);
+check('港股財報不是卡在載入中', hk.loading === false);
+await p3.screenshot({ path: `${OUT}/stock-fin-hk.png`, fullPage: true });
 await ctx3.close();
 
 /* ============================================================
@@ -389,8 +399,8 @@ const mob = await pm.evaluate(() => {
     fomcItems: document.querySelectorAll('#fomcList .fomc-item').length,
     // 觸控目標高度
     refreshH: document.getElementById('macroRefresh')?.getBoundingClientRect().height,
-    inputH: document.getElementById('macroSymbol')?.getBoundingClientRect().height,
-    goH: document.getElementById('macroSymbolGo')?.getBoundingClientRect().height,
+    // 個股財報已移至個股模塊，宏觀頁不應再有代碼輸入框
+    hasSymbolForm: !!document.getElementById('macroSymbolForm'),
     // 不可用列的標籤仍可讀
     unavailTag: document.querySelector('.unavail-tag')?.textContent?.trim(),
   };
@@ -401,7 +411,7 @@ check('手機：表格被容器裁住不撐破版面', mob.tableFits === true);
 check('手機：仍有 18 列資料', mob.rowCount === 18, `實際 ${mob.rowCount}`);
 check('手機：三個分頁都在', mob.tabCount === 3);
 check('手機：按鈕高度 ≥ 32px 可點', (mob.refreshH || 0) >= 32, `實際 ${mob.refreshH}px`);
-check('手機：輸入框高度 ≥ 34px', (mob.inputH || 0) >= 34, `實際 ${mob.inputH}px`);
+check('手機：個股財報輸入框已移出宏觀頁', mob.hasSymbolForm === false);
 check('手機：FOMC 清單仍可讀', mob.fomcItems >= 6, `實際 ${mob.fomcItems}`);
 check('手機：無 JS 錯誤', errsM.length === 0, errsM.join(' | '));
 
@@ -434,8 +444,11 @@ await pr.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await pr.waitForTimeout(2500);
 
 const nav = await pr.evaluate(() => ({
+  // 只計「使用者看得到」的導航項目：nav-detail 平時是 hidden，
+  // 若把它算進來就會變成 5 個，與畫面不符（這條斷言原本靠碰巧通過）。
   items: [...document.querySelectorAll('.main-nav .nav-item')].map((a) => ({
     text: a.textContent.trim(), href: a.getAttribute('href'), active: a.classList.contains('active'),
+    hidden: a.hidden || getComputedStyle(a).display === 'none',
   })),
   navOverflow: (() => {
     const n = document.querySelector('.main-nav');
@@ -448,8 +461,9 @@ const nav = await pr.evaluate(() => ({
   pageOverflowX: document.documentElement.scrollWidth - window.innerWidth,
 }));
 
-check('導航含 4 個項目（含宏觀）', nav.items.length === 4, JSON.stringify(nav.items.map((n) => n.text)));
-check('導航含「宏觀基本面」', nav.items.some((n) => /宏觀/.test(n.text)), JSON.stringify(nav.items.map((n) => n.text)));
+const navVisible = nav.items.filter((n) => !n.hidden);
+check('導航含 4 個可見項目（含宏觀）', navVisible.length === 4, JSON.stringify(navVisible.map((n) => n.text)));
+check('導航含「宏觀基本面」', navVisible.some((n) => /宏觀/.test(n.text)), JSON.stringify(navVisible.map((n) => n.text)));
 check('首頁宏觀 view 保持隱藏', nav.macroHidden === true);
 check('首頁螢幕選股 view 保持隱藏', nav.screenHidden === true);
 check('首頁無水平溢出', nav.pageOverflowX <= 1, `溢出 ${nav.pageOverflowX}px`);

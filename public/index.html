@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="description" content="美股與港股買入位與技術位分析：即時查詢、支撐壓力、均線、量價、歷史回測機率">
-<title>買入位與技術位分析系統 | 美股 · 港股</title>
+<meta name="description" content="股票量化分析專業介面：即時行情、支撐壓力、均線、量價、歷史回測機率、新聞 AI 分析與版塊輪動">
+<title>股票量化分析專業介面 | 美股 · 港股</title>
 
 <!-- PWA -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -14,7 +14,7 @@
 <!-- iOS：加入主畫面後的獨立視窗行為 -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="買入位分析">
+<meta name="apple-mobile-web-app-title" content="股票量化分析">
 <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
 <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
@@ -35,7 +35,7 @@
     <div class="brand">
       <span class="brand-mark">📈</span>
       <div class="brand-text">
-        <strong>買入位與技術位分析</strong>
+        <strong>股票量化分析專業介面</strong>
         <span>美股 · 港股</span>
       </div>
     </div>
@@ -480,6 +480,132 @@
       <div id="advModules" class="adv-modules"></div>
     </section>
 
+    <!-- 個股財報（原在宏觀模塊，已移至個股模塊） -->
+    <section class="card stock-fin-card" id="stockFinCard" aria-label="個股財報">
+      <header class="card-head">
+        <h2 id="stockFinTitle">個股財報</h2>
+        <div class="stock-fin-head-right">
+          <span class="badge badge-neutral" id="stockFinBadge">—</span>
+          <button type="button" id="stockFinRefresh" class="btn btn-ghost btn-sm">
+            <span class="spinner" hidden aria-hidden="true"></span>
+            <span class="btn-label">重新整理</span>
+          </button>
+        </div>
+      </header>
+      <p class="stock-fin-sub" id="stockFinSub">來源：SEC EDGAR XBRL（美股）</p>
+
+      <div class="stock-fin-loading" id="stockFinLoading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span>正在取得財報資料…</span>
+      </div>
+
+      <div class="stock-fin-empty" id="stockFinEmpty" hidden>
+        <strong id="stockFinEmptyTitle">無財報資料</strong>
+        <p id="stockFinEmptyMsg"></p>
+      </div>
+
+      <div id="stockFinBody" hidden>
+        <div class="mt-wrap">
+          <table class="macro-table stock-fin-table">
+            <caption class="sr-only">個股財報：指標、數值、單位、期間與資料來源</caption>
+            <colgroup>
+              <col class="c-name"><col class="c-val"><col class="c-unit">
+              <col class="c-date"><col class="c-src">
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">項目</th>
+                <th scope="col" class="ta-r">數值</th>
+                <th scope="col">單位</th>
+                <th scope="col">期間</th>
+                <th scope="col">來源</th>
+              </tr>
+            </thead>
+            <tbody id="stockFinTableBody"></tbody>
+          </table>
+        </div>
+        <p class="stock-fin-meta" id="stockFinMeta" hidden></p>
+        <p class="stock-fin-note">
+          財報數字來自 SEC EDGAR XBRL 申報文件，非即時報價。
+          港股與未在美申報的公司無此資料，屬正常情況而非載入失敗。
+        </p>
+      </div>
+    </section>
+
+    <!-- 新聞與 AI 分析 -->
+    <section class="card news-ai-card" id="newsAiCard" aria-label="新聞與 AI 分析">
+      <header class="card-head">
+        <h2>新聞與 AI 分析</h2>
+        <div class="news-ai-head-right">
+          <span class="news-ai-badge" id="newsAiBadge">—</span>
+        </div>
+      </header>
+
+      <!-- 載入中 -->
+      <div class="news-ai-loading" id="newsAiLoading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="news-ai-loading-text">彙整權威財經媒體新聞並產生分析…</span>
+      </div>
+
+      <!-- 空狀態／錯誤 -->
+      <div class="news-ai-empty" id="newsAiEmpty" hidden>
+        <p class="news-ai-empty-title" id="newsAiEmptyTitle">尚無分析</p>
+        <p class="news-ai-empty-msg" id="newsAiEmptyMsg">—</p>
+        <button type="button" class="ghost-btn" id="newsAiRetry">重新載入</button>
+      </div>
+
+      <div id="newsAiBody" hidden>
+        <!-- 情緒 + 摘要 -->
+        <div class="news-ai-top">
+          <div class="news-ai-gauge-box">
+            <div class="news-ai-gauge" id="newsAiGauge" role="img" aria-label="新聞情緒分數"></div>
+            <div class="news-ai-gauge-val">
+              <b id="newsAiScore">—</b>
+              <span id="newsAiSentiment">—</span>
+            </div>
+            <div class="news-ai-gauge-scale">
+              <span>-1 極空</span><span>0 中性</span><span>+1 極多</span>
+            </div>
+          </div>
+          <div class="news-ai-summary-box">
+            <h3 class="news-ai-h3">新聞摘要</h3>
+            <p class="news-ai-summary" id="newsAiSummary">—</p>
+            <div class="news-ai-tags" id="newsAiTags"></div>
+          </div>
+        </div>
+
+        <!-- 關鍵事件 -->
+        <div class="news-ai-block">
+          <h3 class="news-ai-h3">關鍵事件 <span class="news-ai-h3-hint">依情緒強度排序，標示影響方向與時間尺度</span></h3>
+          <ul class="news-ai-events" id="newsAiEvents"></ul>
+        </div>
+
+        <!-- 對股價的潛在影響 -->
+        <div class="news-ai-block">
+          <h3 class="news-ai-h3">對股價的潛在影響</h3>
+          <div class="news-ai-impact" id="newsAiImpact">
+            <div class="news-ai-impact-head">
+              <span class="news-ai-impact-dir" id="newsAiImpactDir">—</span>
+              <span class="news-ai-impact-mag" id="newsAiImpactMag">—</span>
+              <span class="news-ai-impact-priced" id="newsAiImpactPriced"></span>
+            </div>
+            <p class="news-ai-impact-text" id="newsAiImpactText">—</p>
+          </div>
+          <div class="news-ai-drivers" id="newsAiDrivers"></div>
+        </div>
+
+        <!-- 新聞清單 -->
+        <div class="news-ai-block">
+          <h3 class="news-ai-h3">新聞來源 <span class="news-ai-h3-hint" id="newsAiListHint">—</span></h3>
+          <ol class="news-ai-list" id="newsAiList"></ol>
+        </div>
+
+        <!-- 來源與時間標註 -->
+        <div class="news-ai-prov" id="newsAiProv">—</div>
+        <p class="news-ai-note" id="newsAiNote"></p>
+      </div>
+    </section>
+
     <!-- 通知 -->
     <section class="card notify-card" aria-label="通知設定">
       <header class="card-head"><h2>價格異動與新聞通知</h2></header>
@@ -672,15 +798,13 @@
         </div>
       </div>
 
-      <!-- 個股查詢（在宏觀頁也能直接跳去看某檔的財報） -->
-      <form id="macroSymbolForm" class="mh-search" autocomplete="off">
-        <label class="mh-search-label" for="macroSymbol">查看個股財報</label>
-        <div class="mh-search-box">
-          <input id="macroSymbol" class="mh-input" type="text" placeholder="輸入代碼，如 AAPL、MSFT（港股無 SEC 財報）"
-                 maxlength="24" spellcheck="false" aria-label="股票代碼">
-          <button type="submit" id="macroSymbolGo" class="btn btn-primary btn-sm">查看</button>
-        </div>
-      </form>
+      <!-- 個股財報已移至個股模塊（#/detail/:symbol 的結果區塊內）。
+           宏觀頁只保留全市場粒度（FRED / FOMC / 資料字典 / AI 解讀），
+           不再在此輸入股票代碼——財報的粒度是「一家公司」，與本頁不符。 -->
+      <p class="mh-scope-note">
+        本頁為<strong>全市場</strong>宏觀儀表板（利率、通膨、FOMC）。
+        個股財報請直接查詢該檔股票，於<strong>個股詳情頁</strong>查看。
+      </p>
 
       <!-- 分頁切換 -->
       <div class="mh-tabs" role="tablist" aria-label="檢視模式">
@@ -1001,6 +1125,77 @@
       </p>
     </section>
 
+    <!-- 版塊輪動 × 宏觀經濟 AI 關聯 -->
+    <section class="card macro-ai-card" id="macroAiCard" aria-label="版塊輪動與宏觀經濟關聯分析">
+      <header class="card-head">
+        <h2>版塊輪動 × 宏觀經濟</h2>
+        <div class="macro-ai-head-right">
+          <span class="macro-ai-badge" id="macroAiBadge">—</span>
+          <button type="button" class="ghost-btn ghost-btn-sm" id="macroAiRefresh">重新分析</button>
+        </div>
+      </header>
+
+      <p class="macro-ai-lead">
+        以目前輪動參數計算 11 個版塊的強弱排名與資金流向，再對照 FRED 的宏觀指標，
+        說明利率、通膨與實體數據如何傳導到版塊表現。<b>排名與分數為後端計算，AI 只負責解釋</b>，
+        因此每次重新整理排名不變、敘述可能不同。
+      </p>
+
+      <div class="macro-ai-loading" id="macroAiLoading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="macro-ai-loading-text">計算輪動排名並比對宏觀指標…</span>
+      </div>
+
+      <div class="macro-ai-empty" id="macroAiEmpty" hidden>
+        <p class="macro-ai-empty-title" id="macroAiEmptyTitle">尚無分析</p>
+        <p class="macro-ai-empty-msg" id="macroAiEmptyMsg">—</p>
+        <button type="button" class="ghost-btn" id="macroAiRetry">重新載入</button>
+      </div>
+
+      <div id="macroAiBody" hidden>
+        <!-- 一、輪動敘述 -->
+        <div class="macro-ai-block">
+          <h3 class="macro-ai-h3">輪動判讀</h3>
+          <p class="macro-ai-narrative" id="macroAiNarrative">—</p>
+        </div>
+
+        <!-- 二、版塊強弱排名 + 資金流向 -->
+        <div class="macro-ai-block">
+          <h3 class="macro-ai-h3">
+            版塊強弱排名
+            <span class="macro-ai-h3-hint">長度＝強弱分數（同期版塊間相對位置 0–100）；標籤為象限與資金流向</span>
+          </h3>
+          <div class="macro-ai-legend" id="macroAiRankLegend"></div>
+          <div class="macro-ai-rank" id="macroAiRank"></div>
+        </div>
+
+        <!-- 三、宏觀指標關聯 -->
+        <div class="macro-ai-block">
+          <h3 class="macro-ai-h3">
+            宏觀指標關聯
+            <span class="macro-ai-h3-hint">每個指標標示當前水位、歷史百分位，以及理論上受益／受壓的版塊</span>
+          </h3>
+          <div class="macro-ai-links" id="macroAiLinks"></div>
+        </div>
+
+        <!-- 四、一致性裁決 -->
+        <div class="macro-ai-block">
+          <h3 class="macro-ai-h3">輪動與宏觀是否互相印證</h3>
+          <div class="macro-ai-consistency" id="macroAiConsistency"></div>
+        </div>
+
+        <!-- 五、觀察重點 -->
+        <div class="macro-ai-block" id="macroAiWatchBlock" hidden>
+          <h3 class="macro-ai-h3">接下來該看什麼</h3>
+          <ul class="macro-ai-watch" id="macroAiWatch"></ul>
+        </div>
+
+        <!-- 來源與時間標註 -->
+        <div class="macro-ai-prov" id="macroAiProv">—</div>
+        <p class="macro-ai-note" id="macroAiNote"></p>
+      </div>
+    </section>
+
     <!-- 版塊明細表 -->
     <section class="card rrg-table-card">
       <header class="card-head">
@@ -1042,5 +1237,7 @@
 <script src="/macro.js"></script>
 <script src="/rrg-client.js"></script>
 <script src="/rrg-treemap.js"></script>
+<script src="/news-ai.js"></script>
+<script src="/stock-fin.js"></script>
 </body>
 </html>

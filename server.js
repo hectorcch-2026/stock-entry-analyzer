@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 股票買入位與技術位分析 — 後端服務
+ * 股票量化分析專業介面 — 後端服務
  *
  * 路由：
  *   GET  /api/health                 健康檢查
@@ -15,6 +15,9 @@
  *   GET  /api/macro/:symbol          個股財報 + 宏觀背景
  *   GET  /api/data-dict              資料字典（欄位定義／來源／值域／範例值）
  *   GET  /api/interpret              宏觀／財報 AI 解讀（scope=macro|fundamentals）
+ *   GET  /api/news?symbol=           相關新聞
+ *   GET  /api/stock-news-ai?symbol=  新聞聚合 + AI 摘要／情緒／影響研判
+ *   GET  /api/sector-macro-ai        版塊輪動 × 宏觀指標 關聯分析
  *   POST /api/notify                 發送 Telegram 通知
  *   GET  /api/config                 通知設定狀態
  *
@@ -44,6 +47,9 @@ const rrgService = require('./lib/rrg-service');
 const sectorHoldings = require('./lib/sector-holdings');
 const treemap = require('./lib/treemap');
 const treemapService = require('./lib/treemap-service');
+const newsHub = require('./lib/news-hub');
+const aiAnalyst = require('./lib/ai-analyst');
+const sectorMacroAi = require('./lib/sector-macro-ai');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -117,6 +123,63 @@ function normalizeSymbol(raw) {
   if (/^[A-Z.\-]{1,10}$/.test(s)) return { ok: true, value: s, isName: false, market: 'US' };
 
   return { ok: false, code: 'INVALID_FORMAT', message: `「${raw}」格式無法辨識`, hint: '美股請輸入如 AAPL，港股請輸入如 0700 或 0700.HK' };
+}
+
+/**
+ * 個股 → 版塊歸屬 + 該版塊目前的 RRG 象限。
+ *
+ * 為什麼要在這裡組合兩份資料：
+ *   AI 要判斷「版塊相對強弱是這檔股票的外部支撐還是壓力」，
+ *   光有「AAPL 屬於 XLK」還不夠 —— 必須知道 XLK 現在是領先還是落後。
+ *   兩者在這裡一次組好，模組只收一個 { key, label, quadrant, quadrantLabel }。
+ *
+ * 為什麼容許失敗：
+ *   港股不在美國版塊 ETF 裡，查不到是預期行為，不是錯誤；
+ *   矩陣抓取失敗（限流、上游異常）也只該讓 AI 少一個因子。
+ *   因此任何一步失敗都回 null，由 ai-analyst 走「無版塊」分支並在 caveats 說明。
+ */
+async function resolveSectorContext(symbol) {
+  try {
+    const hit = await sectorHoldings.sectorOf(symbol);
+    if (!hit) return null;
+
+    const def = rrg.SECTORS.find((s) => s.key === hit.sector);
+    const m = await rrgService.getMatrix(datasource, {
+      timeframe: 'weekly', benchmarkKey: 'SPY',
+    });
+    if (!m.ok) return null;
+
+    const matrix = rrg.buildRRG({
+      dates: m.dates,
+      t: m.t,
+      rows: m.rows,
+      benchmarkKey: 'SPY',
+      sectorKeys: [hit.sector],
+      period: rrg.normPeriod(null, 'weekly').value,
+      windowBars: rrg.normWindow(null, 'weekly').bars,
+      trail: rrg.normTrail(null).value,
+      meta: { sectors: rrg.SECTORS },
+    });
+    if (!matrix.ok || !matrix.points.length) return null;
+
+    const pt = matrix.points[0];
+    return {
+      key: hit.sector,
+      label: def ? def.label : hit.sector,
+      short: def ? def.short : hit.sector,
+      quadrant: pt.quadrant,
+      quadrantLabel: pt.quadrantLabel,
+      ratio: pt.ratio,
+      momentum: pt.momentum,
+      // 歸屬依據要能被查核：「你是 XLK 第 1 大持股、權重 17.95%」
+      weight: +Number(hit.weight).toFixed(2),
+      rankInSector: hit.rank,
+      indexAsOf: hit.asOf,
+      asOf: pt.asOf,
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 /** 解析查詢：若為名稱或模糊輸入，先搜尋再取最相符代碼 */
@@ -1208,6 +1271,202 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    /**
+     * 新聞 + AI 分析（個股頁「新聞與 AI 分析」區塊）
+     * ────────────────────────────────────────────────────────
+     * GET /api/stock-news-ai?symbol=AAPL&days=7&limit=12&mode=auto&refresh=1
+     *
+     * 為什麼要自己抓分析資料（而不是要求前端把 /api/analyze 的結果送上來）：
+     *   1. 使用者直接開這個端點（或換裝置、換分頁）時也要能用；
+     *   2. AI 需要的價格脈絡（5/20/60 日漲跌、ATR、RSI、20 日區間位置）
+     *      必須與個股頁顯示的數字同源，否則 AI 的推理會引用到對不上的數字；
+     *   3. 前端已有 /api/analyze 的結果時，可用 `analysis=1` 之外的參數省一次抓取
+     *      —— 但正確性優先於省一次請求。
+     *
+     * 降級策略（見 docs/新聞與AI分析_資料契約與來源策略.md §5）：
+     *   任何單一來源失敗都不得回 500。新聞全失敗 → 仍回 200 並帶 AI 的技術面-only 判讀；
+     *   LLM 失敗 → 退回規則層並在 ai.note 說明原因。
+     */
+    if (pathname === '/api/stock-news-ai' && req.method === 'GET') {
+      const raw = (q.symbol || q.s || '').trim();
+      if (!raw) {
+        return sendError(res, 400, 'EMPTY', '請提供股票代碼',
+          '例如 AAPL、0700.HK、9988');
+      }
+      const norm = normalizeSymbol(raw);
+      if (!norm.ok) return sendError(res, 400, norm.code, norm.message, norm.hint);
+
+      const modeRaw = String(q.mode || 'auto').toLowerCase();
+      if (!['auto', 'llm', 'rule'].includes(modeRaw)) {
+        return sendError(res, 400, 'BAD_MODE', `不支援的 mode「${q.mode}」`,
+          '可用：auto（預設，能呼叫 LLM 就呼叫）、llm（強制）、rule（只用規則層）');
+      }
+
+      const daysRaw = q.days;
+      let days = 7;
+      if (daysRaw != null && daysRaw !== '') {
+        const n = Number(daysRaw);
+        if (!Number.isFinite(n) || n < 1 || n > 30) {
+          return sendError(res, 400, 'BAD_DAYS', `days 必須是 1–30 的整數（收到「${daysRaw}」）`);
+        }
+        days = Math.floor(n);
+      }
+
+      const limitRaw = q.limit;
+      let limit = 12;
+      if (limitRaw != null && limitRaw !== '') {
+        const n = Number(limitRaw);
+        if (!Number.isFinite(n) || n < 1 || n > 30) {
+          return sendError(res, 400, 'BAD_LIMIT', `limit 必須是 1–30 的整數（收到「${limitRaw}」）`);
+        }
+        limit = Math.floor(n);
+      }
+
+      // 名稱用於港股的新聞查詢（「騰訊 0700」比單獨「0700」有效得多），
+      // 也讓 relevance 過濾能認出公司名。取不到名稱不算失敗，只是過濾較保守。
+      let name = String(q.name || '').trim() || null;
+      let analysis = null;
+
+      /* 版塊歸屬與 RRG 象限：讓 AI 能納入「版塊相對強弱」這個外部因素。
+         兩者都靠快取（矩陣 30 分鐘、持股索引 6 小時），暖機後近乎零成本；
+         冷啟動合計約 0.8 秒，與 LLM 的 5–7 秒相比可忽略。
+         任何一步失敗都只是少一個因子，不得影響新聞與其他研判。 */
+      const sectorCtx = q.sector === '0'
+        ? Promise.resolve(null)
+        : resolveSectorContext(norm.value);
+
+      const [analysisRes, sector] = await Promise.all([
+        analyzer.analyze(norm.value).catch((e) => {
+          // 分析失敗不阻擋：新聞與 AI 仍可基於新聞本身運作（只是沒有價格脈絡）。
+          // 但若是限流／上游 5xx，要讓使用者知道數字缺席的原因。
+          if (e && e.status === 429) {
+            const err = new Error('資料來源請求過於頻繁，請稍候再試');
+            err.code = 'RATE_LIMITED';
+            err.status = 429;
+            throw err;
+          }
+          return null;
+        }),
+        sectorCtx,
+      ]);
+      analysis = analysisRes;
+      if (!name && analysis) name = (analysis.meta && analysis.meta.name) || null;
+
+      const out = await aiAnalyst.analyzeStock({
+        symbol: norm.value,
+        name,
+        analysis,
+        sector,
+        days,
+        limit,
+        mode: modeRaw,
+        refresh: q.refresh === '1',
+      });
+
+      return sendJSON(res, 200, {
+        ...out,
+        /* 明確標示「價格脈絡是否可用」：AI 的研判若沒有價格數字支撐，
+           前端要能顯示提示，而不是讓使用者以為那是完整的綜合研判。 */
+        priceContextAvailable: !!(analysis && out.price && out.price.seriesBars),
+      });
+    }
+
+    /**
+     * 版塊輪動 × 宏觀經濟 關聯分析（RRG 頁「AI 關聯解讀」區塊）
+     * ────────────────────────────────────────────────────────
+     * GET /api/sector-macro-ai?timeframe=weekly&window=1y&period=14
+     *                          &benchmark=SPY&trail=5&mode=auto&refresh=1
+     *
+     * 輪動參數與 /api/rrg 完全共用同一套驗證函式（rrg.norm*），
+     * 避免「RRG 圖上顯示一組參數、AI 區塊講另一組」的錯位。
+     *
+     * 為什麼不讓前端把 /api/rrg 的 points 傳進來：
+     *   11 個版塊 × trail 個軌跡點會是幾十 KB 的 POST body，
+     *   而且前端一旦改動參數卻忘了重送，AI 就會拿舊資料講新結論。
+     *   由後端重算（有 3 分鐘快取）在成本與正確性上都更好。
+     */
+    if (pathname === '/api/sector-macro-ai' && req.method === 'GET') {
+      const tf = rrg.normTimeframe(q.timeframe);
+      if (!tf.ok) return sendError(res, 400, tf.code, tf.message, tf.hint);
+
+      const win = rrg.normWindow(q.window, tf.key);
+      if (!win.ok) return sendError(res, 400, win.code, win.message, win.hint);
+
+      const trail = rrg.normTrail(q.trail);
+      if (!trail.ok) return sendError(res, 400, trail.code, trail.message, trail.hint);
+
+      const period = rrg.normPeriod(q.period, tf.key);
+      if (!period.ok) return sendError(res, 400, period.code, period.message, period.hint);
+
+      const bench = rrg.normBenchmark(q.benchmark);
+      if (!bench.ok) return sendError(res, 400, bench.code, bench.message, bench.hint);
+
+      const modeRaw = String(q.mode || 'auto').toLowerCase();
+      if (!['auto', 'llm', 'rule'].includes(modeRaw)) {
+        return sendError(res, 400, 'BAD_MODE', `不支援的 mode「${q.mode}」`,
+          '可用：auto（預設）、llm（強制）、rule（只用規則層）');
+      }
+
+      if (q.refresh === '1') {
+        rrgService.resetCache();
+        sectorMacroAi.resetCache();
+      }
+
+      // 預設板塊全集：AI 要判斷「誰強誰弱」必須看全部 11 個，
+      // 只給 3 個版塊的排名沒有比較基準。此端點刻意不吃 sectors 參數。
+      const m = await rrgService.getMatrix(datasource, {
+        timeframe: tf.key, benchmarkKey: bench.key,
+      });
+      if (!m.ok) return sendError(res, 503, m.code, m.message, m.hint);
+
+      const matrix = rrg.buildRRG({
+        dates: m.dates,
+        t: m.t,
+        rows: m.rows,
+        benchmarkKey: bench.key,
+        sectorKeys: rrg.SECTORS.map((s) => s.key),
+        period: period.value,
+        windowBars: win.bars,
+        trail: trail.value,
+        meta: { sectors: rrg.SECTORS },
+      });
+
+      if (!matrix.ok) {
+        const status = matrix.code === 'INSUFFICIENT_DATA' ? 422 : 503;
+        return sendJSON(res, status, {
+          ok: false,
+          error: { code: matrix.code, message: matrix.message, hint: matrix.hint },
+          coverage: matrix.coverage || [],
+        });
+      }
+
+      const out = await sectorMacroAi.analyzeSectorMacro({
+        rrg: {
+          points: matrix.points,
+          timeframe: tf.key,
+          timeframeLabel: rrg.TIMEFRAMES[tf.key].label,
+          window: win.key,
+          windowLabel: rrg.WINDOWS[win.key].label,
+          period: period.value,
+          trail: trail.value,
+          benchmark: bench.key,
+          benchmarkLabel: bench.def.label,
+          asOf: matrix.points[0] ? matrix.points[0].asOf : null,
+          adjFallback: m.adjFallback || [],
+        },
+        mode: modeRaw,
+        refresh: q.refresh === '1',
+      });
+
+      return sendJSON(res, 200, {
+        ...out,
+        benchmarkLabel: bench.def.label,
+        windowLabel: rrg.WINDOWS[win.key].label,
+        coverage: matrix.coverage || [],
+        failures: m.failures || [],
+      });
+    }
+
     if (pathname === '/api/notify' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req)) || '{}');
       if (!body.symbol) return sendError(res, 400, 'EMPTY', '缺少 symbol 參數');
@@ -1259,7 +1518,7 @@ const server = http.createServer(async (req, res) => {
 
 // 綁定 0.0.0.0 以便在容器 / 反向代理環境（如雲端沙箱）中接受外部連線
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  股票買入位與技術位分析系統`);
+  console.log(`\n  股票量化分析專業介面`);
   console.log(`  服務已啟動： http://0.0.0.0:${PORT}`);
   console.log(`  Telegram 通知： ${telegram.isConfigured() ? '已設定' : '未設定（模擬模式）'}`);
   const ps = pool.summary();

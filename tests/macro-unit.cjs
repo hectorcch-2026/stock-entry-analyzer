@@ -1203,7 +1203,11 @@ t('L3 index.html 新 view 引用的 class 都有樣式', () => {
 t('L4 common.js 已註冊 macro 路由並提供 onMacro 鉤子', () => {
   assert.ok(/macro:\s*'macro'/.test(commonSrc), 'ROUTES 需含 macro');
   assert.ok(/onMacro/.test(commonSrc), 'handlers 需含 onMacro');
-  assert.ok(/head === 'macro'/.test(commonSrc), '需解析 #/macro/:symbol');
+  assert.ok(/head === 'macro'/.test(commonSrc), '需解析 #/macro');
+  // 個股財報已移至個股模塊：舊路由 #/macro/:symbol 仍要能被解析，
+  // 但目的是轉址到 #/detail/:symbol，不是留在宏觀頁顯示財報。
+  assert.ok(/個股財報/.test(commonSrc) && /detail/.test(commonSrc),
+    '需在註解說明財報已移至個股模塊');
 });
 
 t('L5 macro.js 已掛上 SA.onRoute，且對外匯出測試介面', () => {

@@ -14,9 +14,9 @@
   var SA = global.SA;
   if (!SA) return;
 
+  // 本頁只處理全市場宏觀資料。個股財報已移至個股模塊（見 stock-fin.js），
+  // 因此不再保留 scope / symbol 狀態——留著只會讓人誤以為這裡還能切換個股。
   var state = {
-    scope: null,          // 'macro' | 'symbol'
-    symbol: null,
     macro: null,
     dict: null,
     dictGroup: 'all',
@@ -481,8 +481,6 @@
     return SA.api('/api/macro' + (force ? '?refresh=1' : ''))
       .then(function (d) {
         state.macro = d;
-        state.scope = 'macro';
-        state.symbol = null;
 
         renderMacroTable(d.series);
         renderFomc(d.fomc);
@@ -500,12 +498,7 @@
           hideNotice();
         }
 
-        // 若網址帶了 symbol，順便載入該股
-        if (state.pendingSymbol) {
-          var s = state.pendingSymbol;
-          state.pendingSymbol = null;
-          loadSymbol(s);
-        }
+        // 個股財報已移至個股模塊，宏觀頁不再處理 symbol
       })
       .catch(function (err) {
         var info = SA.describeError(err);
@@ -519,145 +512,7 @@
       })
       .then(function () {
         setBusy(false);
-        state.pendingSymbol = null;
       });
-  }
-
-  /** 載入個股財報 */
-  function loadSymbol(symbol) {
-    if (!symbol) return Promise.resolve();
-    setBusy(true);
-    showNotice('<span class="mn-spin" aria-hidden="true"></span>'
-      + '正在取得 ' + SA.esc(symbol) + ' 的財報與解讀…', 'loading');
-
-    return SA.api('/api/macro/' + encodeURIComponent(symbol))
-      .then(function (d) {
-        state.scope = 'symbol';
-        state.symbol = d.symbol;
-
-        var title = $('macroTitle');
-        var sub = $('macroSub');
-        if (title) title.textContent = (d.fundamentals && d.fundamentals.entityName)
-          ? d.fundamentals.entityName + '（' + d.symbol + '）' : d.symbol;
-        if (sub) sub.textContent = '企業財報：SEC EDGAR XBRL　·　宏觀背景：FRED';
-
-        // 財報表格：用 metrics 組出來
-        renderFundamentalsTable(d.fundamentals, d.macroBackdrop);
-        renderFomc(state.macro ? state.macro.fomc : null);
-        renderLimits(d.fundamentals && d.fundamentals.gaps
-          ? ['資料缺口：' + d.fundamentals.gaps.join('、')]
-          : []);
-        renderInterp(d.interpretation, null);
-
-        setStamp('資料時間 ' + new Date(d.generatedAt).toLocaleString('zh-TW', { hour12: false }));
-
-        if (!d.fundamentals || !d.fundamentals.available) {
-          // 不是錯誤，是「本來就沒有」——用 warn 而非 error
-          showNotice('ℹ️ ' + SA.esc((d.fundamentals && d.fundamentals.reason) || '此標的無財報資料')
-            + (d.fundamentals && d.fundamentals.hint
-              ? '<div class="mn-hint">' + SA.esc(d.fundamentals.hint) + '</div>' : ''), 'warn');
-        } else {
-          hideNotice();
-        }
-      })
-      .catch(function (err) {
-        var info = SA.describeError(err);
-        showNotice('<strong>' + SA.esc(info.title) + '</strong> '
-          + SA.esc(info.message) + '　<span class="mn-hint">' + SA.esc(info.hint) + '</span>', 'error');
-      })
-      .then(function () { setBusy(false); });
-  }
-
-  /** 把財報 metrics 渲染成表格（沿用 macro-table 樣式） */
-  function renderFundamentalsTable(fund, backdrop) {
-    var body = $('macroTableBody');
-    if (!body) return;
-
-    if (!fund || !fund.available) {
-      body.innerHTML = '<tr><td colspan="6" class="mt-empty">'
-        + SA.esc((fund && fund.reason) || '無財報資料') + '</td></tr>';
-      var countEl = $('macroCount');
-      if (countEl) countEl.textContent = '0 項';
-      return;
-    }
-
-    var m = fund.metrics || {};
-    var rows = [];
-
-    function row(label, def, value, unit, asOf, source) {
-      rows.push({ label: label, def: def, value: value, unit: unit, asOf: asOf, source: source });
-    }
-
-    if (m.revenue) {
-      row('營收（' + m.revenue.basis + '）',
-        m.revenue.method || '來自 SEC XBRL 損益表',
-        fmtUsd(m.revenue.value), 'USD', m.revenue.to, 'SEC EDGAR XBRL');
-    }
-    if (m.revenue && m.revenue.yoy != null) {
-      row('營收年增率', '與去年同期比較（同基期口徑）',
-        fmtPct(m.revenue.yoy), '%', m.revenue.to, 'SEC EDGAR XBRL');
-    }
-    if (m.netIncome) {
-      row('淨利（' + m.netIncome.basis + '）', '扣除所有費用與稅後',
-        fmtUsd(m.netIncome.value), 'USD', m.netIncome.to, 'SEC EDGAR XBRL');
-    }
-    if (m.grossMargin != null) {
-      row('毛利率', '（營收 − 營業成本）/ 營收', SA.fmt(m.grossMargin), '%', fund.asOf, 'SEC EDGAR XBRL');
-    }
-    if (m.operatingMargin != null) {
-      row('營業利益率', '營業利益 / 營收', SA.fmt(m.operatingMargin), '%', fund.asOf, 'SEC EDGAR XBRL');
-    }
-    if (m.netMargin != null) {
-      row('淨利率', '淨利 / 營收', SA.fmt(m.netMargin), '%', fund.asOf, 'SEC EDGAR XBRL');
-    }
-    if (m.epsDiluted) {
-      row('稀釋 EPS', '計入潛在稀釋效果', SA.fmt(m.epsDiluted.value), 'USD/share',
-        m.epsDiluted.to, 'SEC EDGAR XBRL');
-    }
-    if (m.roe != null) {
-      row('ROE', m.roeNote ? '淨利 / 股東權益（注意：權益偏小會使比率偏高）' : '淨利 / 股東權益',
-        SA.fmt(m.roe), '%', fund.balance && fund.balance.equity ? fund.balance.equity.asOf : fund.asOf,
-        'SEC EDGAR XBRL');
-    }
-    if (m.debtRatio != null) {
-      row('負債比', '總負債 / 總資產', SA.fmt(m.debtRatio), '%', fund.asOf, 'SEC EDGAR XBRL');
-    }
-
-    // 宏觀背景
-    if (backdrop) {
-      if (backdrop.fedTargetUpper) {
-        row('政策利率上限（背景）', 'FOMC 目標區間上緣',
-          SA.fmt(backdrop.fedTargetUpper.value), '%', backdrop.fedTargetUpper.asOf, 'FRED');
-      }
-      if (backdrop.dgs10) {
-        row('10 年期殖利率（背景）', '市場交易結果，非政策利率',
-          SA.fmt(backdrop.dgs10.value), '%', backdrop.dgs10.asOf, 'FRED');
-      }
-      if (backdrop.termSpread) {
-        row('10Y-2Y 利差（背景）', '負值代表殖利率倒掛',
-          SA.fmt(backdrop.termSpread.value), '%', backdrop.termSpread.asOf, 'FRED');
-      }
-    }
-
-    if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="6" class="mt-empty">此標的無可顯示的財務欄位</td></tr>';
-      return;
-    }
-
-    body.innerHTML = rows.map(function (r) {
-      return '<tr>'
-        + '<td><div class="mt-name">' + SA.esc(r.label) + '</div>'
-        + '<div class="mt-def">' + SA.esc(r.def) + '</div></td>'
-        + '<td class="ta-r mt-val">' + SA.esc(r.value) + '</td>'
-        + '<td class="mt-unit">' + SA.esc(r.unit) + '</td>'
-        + '<td class="mt-date">' + SA.esc(r.asOf || '—') + '</td>'
-        + '<td class="ta-r mt-dim">—</td>'
-        + '<td>' + sourceBadge(r.source) + '</td>'
-        + '</tr>';
-    }).join('');
-
-    var count = $('macroCount');
-    if (count) count.textContent = rows.length + ' 項';
   }
 
   /* ---------------- 分頁 ---------------- */
@@ -711,9 +566,8 @@
     if (spin) spin.hidden = false;
     if (label) label.textContent = '潤飾中…';
 
-    var qs = state.scope === 'symbol' && state.symbol
-      ? '/api/interpret?scope=fundamentals&mode=llm&symbol=' + encodeURIComponent(state.symbol)
-      : '/api/interpret?scope=macro&mode=llm';
+    // 個股財報已移至個股模塊，宏觀頁的 AI 潤飾一律針對全市場宏觀解讀
+    var qs = '/api/interpret?scope=macro&mode=llm';
 
     return SA.api(qs)
       .then(function (d) {
@@ -746,22 +600,7 @@
     var refresh = $('macroRefresh');
     if (refresh) {
       refresh.addEventListener('click', function () {
-        if (state.scope === 'symbol' && state.symbol) {
-          loadSymbol(state.symbol);
-        } else {
-          loadMacro(true);
-        }
-      });
-    }
-
-    var form = $('macroSymbolForm');
-    if (form) {
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var input = $('macroSymbol');
-        var v = input ? String(input.value || '').trim() : '';
-        if (!v) { if (input) input.focus(); return; }
-        SA.navigate('#/macro/' + encodeURIComponent(v.toUpperCase()));
+        loadMacro(true);
       });
     }
 
@@ -792,10 +631,15 @@
     onMacro: function (symbol) {
       bindEvents();
 
+      // 個股財報已移至個股模塊。若有人用舊網址 #/macro/AAPL 進來，
+      // 直接轉到個股詳情頁，不讓使用者停在一個已被搬走的功能上。
+      if (symbol) {
+        SA.navigate('#/detail/' + encodeURIComponent(symbol));
+        return;
+      }
+
       // 已經有宏觀資料就不重抓（換個網址參數不該重打 18 個序列）
-      if (state.macro && !symbol) {
-        state.scope = 'macro';
-        state.symbol = null;
+      if (state.macro) {
         renderMacroTable(state.macro.series);
         renderFomc(state.macro.fomc);
         renderLimits(state.macro.limitations);
@@ -805,19 +649,6 @@
         if (t) t.textContent = '宏觀經濟儀表板';
         if (s) s.textContent = '資料來源：FRED（聖路易斯聯準銀行）＋ Federal Reserve';
         setStamp('資料時間 ' + new Date(state.macro.generatedAt).toLocaleString('zh-TW', { hour12: false }));
-        switchTab('overview');
-        return;
-      }
-
-      if (symbol) {
-        // 有 symbol：先確保宏觀資料在手（作為背景），再載入個股
-        if (state.macro) {
-          renderFomc(state.macro.fomc);
-          loadSymbol(symbol);
-        } else {
-          state.pendingSymbol = symbol;
-          loadMacro(false);
-        }
         switchTab('overview');
         return;
       }
@@ -834,7 +665,6 @@
     fmtUsd: fmtUsd,
     stanceMeta: stanceMeta,
     loadMacro: loadMacro,
-    loadSymbol: loadSymbol,
     switchTab: switchTab,
   };
 })(window);

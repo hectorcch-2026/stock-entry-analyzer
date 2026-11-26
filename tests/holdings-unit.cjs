@@ -481,7 +481,17 @@ t('F8 API 端點存在且路徑正確', () => {
 t('F9 Service Worker 版本已升（否則舊殼會蓋掉新頁）', () => {
   const m = sw.match(/const VERSION = '(v[\d.]+)'/);
   assert.ok(m, '找不到 VERSION');
-  assert.ok(m[1] >= 'v1.0.6', `版本應 >= v1.0.6，得 ${m[1]}`);
+  /* 逐段比數字，不要比字串：'v1.0.10' < 'v1.0.7' 在字串比較下成立。 */
+  const num = (v) => (v.match(/\d+/g) || []).map(Number);
+  const cmp = (a, b) => {
+    const x = num(a), y = num(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  };
+  assert.ok(cmp(m[1], 'v1.0.6') >= 0, `版本應 >= v1.0.6，得 ${m[1]}`);
 });
 
 t('F10 前端只用 ES5（本專案既有約束）', () => {

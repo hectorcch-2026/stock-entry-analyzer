@@ -1,5 +1,5 @@
 /* ===================================================
-   買入位與技術位分析系統 — 樣式表
+   股票量化分析專業介面 — 樣式表
    設計原則：明亮、清晰、行動優先，紅漲綠跌（華人市場慣例）
    =================================================== */
 
@@ -2560,4 +2560,495 @@ div.fomc-next {
   .rrg-tm-tools { display: none; }
   .rrg-tm-tip { display: none !important; }
   .rrg-tm-wrap { break-inside: avoid; }
+}
+
+/* ===================================================
+   新聞與 AI 分析（個股頁）
+   ---------------------------------------------------
+   顏色語義刻意與漲跌色分離：
+     漲跌用紅綠（--up / --down），新聞情緒改用藍／橘／灰。
+     若沿用紅綠，使用者會把「新聞利空」直接讀成「股價下跌」，
+     但兩者是不同層級的資訊，必須在視覺上先分開，再靠文字說清楚。
+   =================================================== */
+
+.news-ai-card { margin-top: 14px; }
+.news-ai-head-right { display: flex; align-items: center; gap: 8px; }
+
+.news-ai-badge {
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-2);
+  border: 1px solid var(--border); white-space: nowrap;
+}
+.news-ai-badge.is-llm { background: var(--brand-soft); color: var(--brand); border-color: #c7d7fd; }
+.news-ai-badge.is-rule { background: var(--warn-soft); color: var(--warn); border-color: #f2ddb4; }
+
+.news-ai-loading,
+.macro-ai-loading {
+  display: flex; align-items: center; gap: 9px;
+  padding: 18px 2px; color: var(--text-2); font-size: 13px;
+}
+.news-ai-empty,
+.macro-ai-empty {
+  padding: 18px 2px; text-align: center;
+}
+.news-ai-empty-title,
+.macro-ai-empty-title { margin: 0 0 5px; font-size: 14px; font-weight: 600; }
+.news-ai-empty-msg,
+.macro-ai-empty-msg { margin: 0 0 12px; font-size: 12.5px; color: var(--text-2); line-height: 1.65; }
+
+.news-ai-h3,
+.macro-ai-h3 {
+  margin: 0 0 9px; font-size: 13px; font-weight: 600; color: var(--text);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+}
+.news-ai-h3-hint,
+.macro-ai-h3-hint {
+  font-size: 11.5px; font-weight: 400; color: var(--text-3); line-height: 1.5;
+}
+
+.news-ai-block,
+.macro-ai-block { margin-top: 16px; }
+
+/* ---------- 上半部：情緒量表 + 摘要 ---------- */
+.news-ai-top {
+  display: grid; grid-template-columns: 178px 1fr; gap: 16px;
+  align-items: start;
+}
+.news-ai-gauge-box {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 8px 8px; text-align: center;
+}
+.news-ai-gauge { width: 100%; }
+.nag-svg { width: 100%; height: auto; display: block; }
+.news-ai-gauge-val { margin-top: -6px; display: flex; flex-direction: column; gap: 2px; }
+.news-ai-gauge-val b { font-size: 19px; font-family: var(--mono); letter-spacing: -.3px; }
+.news-ai-gauge-val b.s-pos { color: var(--brand); }
+.news-ai-gauge-val b.s-neg { color: #c2410c; }
+.news-ai-gauge-val b.s-neu,
+.news-ai-gauge-val b.s-mix { color: var(--text-2); }
+.news-ai-gauge-val span { font-size: 11.5px; color: var(--text-2); }
+.news-ai-gauge-scale {
+  display: flex; justify-content: space-between; margin-top: 6px;
+  font-size: 10px; color: var(--text-3);
+}
+
+.news-ai-summary {
+  margin: 0; font-size: 13.5px; line-height: 1.8; color: var(--text);
+  white-space: pre-wrap;
+}
+.news-ai-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.news-ai-tag {
+  font-size: 11px; padding: 2.5px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2);
+  white-space: nowrap;
+}
+.news-ai-tag.is-t1 { background: var(--brand-soft); border-color: #c7d7fd; color: var(--brand); }
+.news-ai-tag.q-leading { color: #0b7a44; background: var(--down-soft); border-color: #b7e5cf; }
+.news-ai-tag.q-weakening { color: var(--warn); background: var(--warn-soft); border-color: #f2ddb4; }
+.news-ai-tag.q-lagging { color: #a82020; background: var(--up-soft); border-color: #f6c9c9; }
+.news-ai-tag.q-improving { color: var(--brand); background: var(--brand-soft); border-color: #c7d7fd; }
+
+/* ---------- 關鍵事件 ---------- */
+.news-ai-events { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.news-ai-ev {
+  display: grid; grid-template-columns: 20px 1fr auto; gap: 8px;
+  align-items: start; padding: 8px 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12.5px; line-height: 1.6;
+}
+.news-ai-ev-dir { font-size: 11px; text-align: center; line-height: 1.7; }
+.news-ai-ev-dir.up { color: var(--brand); }
+.news-ai-ev-dir.down { color: #c2410c; }
+.news-ai-ev-dir.neutral { color: var(--text-3); }
+.news-ai-ev-text { color: var(--text); }
+.news-ai-ev-hz {
+  font-size: 10.5px; color: var(--text-3); white-space: nowrap;
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px;
+  background: var(--surface);
+}
+.news-ai-ev-empty { font-size: 12.5px; color: var(--text-3); padding: 6px 2px; }
+
+/* ---------- 股價影響 ---------- */
+.news-ai-impact {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 11px 12px;
+}
+.news-ai-impact-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 7px; }
+.news-ai-impact-dir {
+  font-size: 12px; font-weight: 600; padding: 2.5px 9px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-2);
+}
+.news-ai-impact-dir.up { color: var(--brand); border-color: #c7d7fd; background: var(--brand-soft); }
+.news-ai-impact-dir.down { color: #c2410c; border-color: #f3cdb4; background: #fff4ec; }
+.news-ai-impact-mag { font-size: 11.5px; color: var(--text-2); }
+.news-ai-impact-priced { font-size: 11.5px; color: var(--text-3); margin-left: auto; }
+.news-ai-impact-text { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--text); }
+
+.news-ai-drivers { margin-top: 10px; }
+.news-ai-drv-title { font-size: 11.5px; color: var(--text-3); margin-bottom: 6px; }
+.news-ai-drv {
+  display: grid; grid-template-columns: minmax(0, 15em) 1fr 42px; gap: 10px;
+  align-items: center; margin-bottom: 6px; font-size: 11.5px;
+}
+.news-ai-drv-name {
+  color: var(--text-2);
+  /* min-width:0 是必要的：grid/flex 子項預設 min-width:auto，
+     內容會把軌道撐開、text-overflow 永遠不觸發
+     （實測手機版被撐到 429px）。
+     允許兩行：因子名常有 20+ 字，硬壓成一行就變成看不懂的省略號。 */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  line-height: 1.5;
+}
+.news-ai-drv-bar { height: 7px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.news-ai-drv-bar i { display: block; height: 100%; border-radius: 999px; background: var(--text-3); }
+.news-ai-drv-bar i.up { background: var(--brand); }
+.news-ai-drv-bar i.down { background: #f08a4b; }
+.news-ai-drv-w { font-family: var(--mono); color: var(--text-3); text-align: right; }
+.news-ai-drv-empty { font-size: 11.5px; color: var(--text-3); }
+.news-ai-sec {
+  display: block; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border); font-size: 11.5px; line-height: 1.65; color: var(--text-2);
+}
+.news-ai-sec.muted { color: var(--text-3); }
+
+/* ---------- 新聞清單 ---------- */
+.news-ai-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.news-ai-item {
+  padding: 9px 2px; border-bottom: 1px solid var(--border);
+}
+.news-ai-item:last-child { border-bottom: 0; }
+.news-ai-item-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 3px; }
+.news-ai-item-pub { font-size: 11.5px; color: var(--text-2); font-weight: 500; }
+.news-ai-item-time { font-size: 11px; color: var(--text-3); }
+.news-ai-item-title { font-size: 13px; line-height: 1.6; }
+.news-ai-item-title a { color: var(--text); text-decoration: none; }
+.news-ai-item-title a:hover { color: var(--brand); text-decoration: underline; }
+.news-ai-item-desc {
+  margin: 4px 0 0; font-size: 12px; line-height: 1.65; color: var(--text-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.news-ai-item-also { display: block; margin-top: 4px; font-size: 11px; color: var(--text-3); }
+.news-ai-list-empty { font-size: 12.5px; color: var(--text-2); line-height: 1.7; padding: 8px 2px; }
+
+/* 來源分級徽章：T1/T2/T3 表示權威性，必須有文字說明而不是只有顏色 */
+.tier-badge {
+  display: inline-block; font-size: 9.5px; font-weight: 700; line-height: 1.5;
+  padding: 0 4px; border-radius: 3px; vertical-align: 1px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-3);
+}
+.tier-badge.t1 { background: var(--brand-soft); border-color: #c7d7fd; color: var(--brand); }
+.tier-badge.t2 { background: var(--surface-2); border-color: var(--border-strong); color: var(--text-2); }
+.tier-badge.t3 { background: var(--surface); border-color: var(--border); color: var(--text-3); }
+
+/* ---------- 來源與時間標註 ---------- */
+.news-ai-prov,
+.macro-ai-prov {
+  margin-top: 16px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 11.5px; line-height: 1.85; color: var(--text-2);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.news-ai-prov-item b,
+.macro-ai-prov-item b { color: var(--text); font-weight: 600; margin-right: 6px; }
+.news-ai-note,
+.macro-ai-note {
+  margin: 9px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--text-3);
+}
+.news-ai-note b, .macro-ai-note b { color: var(--text-2); display: block; margin-bottom: 3px; }
+
+/* Google 轉址標記：告訴使用者「點下去會先到 Google News」 */
+.news-ai-item-kind {
+  font-size: 9.5px; padding: 0 4px; border-radius: 3px;
+  border: 1px dashed var(--border-strong); color: var(--text-3);
+}
+
+@media (max-width: 720px) {
+  .news-ai-top { grid-template-columns: 1fr; }
+  .news-ai-gauge-box { max-width: 220px; margin: 0 auto; }
+  .news-ai-ev { grid-template-columns: 18px 1fr; }
+  .news-ai-ev-hz { grid-column: 2; justify-self: start; margin-top: 2px; }
+  /* 手機上因子名稱（常長達 20+ 字）擠不進 96px 一欄，
+     改成名稱獨佔一列、長條與權重共一列，避免文字被截到看不懂。 */
+  .news-ai-drv {
+    grid-template-columns: 1fr 42px;
+    grid-template-areas: "name name" "bar w";
+    gap: 4px 8px; margin-bottom: 9px;
+  }
+  .news-ai-drv-name { grid-area: name; white-space: normal; }
+  .news-ai-drv-bar { grid-area: bar; }
+  .news-ai-drv-w { grid-area: w; }
+}
+
+/* ===================================================
+   版塊輪動 × 宏觀經濟（RRG 頁）
+   =================================================== */
+
+.macro-ai-card { margin-top: 14px; }
+.macro-ai-head-right { display: flex; align-items: center; gap: 8px; }
+.macro-ai-badge {
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-2);
+  border: 1px solid var(--border); white-space: nowrap;
+}
+.macro-ai-badge.is-llm { background: var(--brand-soft); color: var(--brand); border-color: #c7d7fd; }
+.macro-ai-badge.is-rule { background: var(--warn-soft); color: var(--warn); border-color: #f2ddb4; }
+.ghost-btn-sm { padding: 4px 10px; font-size: 12px; }
+
+.macro-ai-lead {
+  margin: 0 0 4px; font-size: 12.5px; line-height: 1.75; color: var(--text-2);
+}
+.macro-ai-narrative {
+  margin: 0; font-size: 13.5px; line-height: 1.85; color: var(--text); white-space: pre-wrap;
+}
+
+/* ---------- 排名條 ---------- */
+.macro-ai-legend {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; font-size: 11px; color: var(--text-2);
+}
+.macro-ai-lg { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.macro-ai-lg i { width: 9px; height: 9px; border-radius: 2px; background: var(--text-3); }
+.macro-ai-lg.q-leading i { background: #0b7a44; }
+.macro-ai-lg.q-weakening i { background: var(--warn); }
+.macro-ai-lg.q-lagging i { background: #a82020; }
+.macro-ai-lg.q-improving i { background: var(--brand); }
+.macro-ai-lg.f-in { color: var(--down); }
+.macro-ai-lg.f-out { color: var(--up); }
+.macro-ai-lg.f-neu { color: var(--text-3); }
+.macro-ai-lg-sep { color: var(--border-strong); }
+
+.macro-ai-rank { display: grid; gap: 3px; }
+.macro-ai-rank-row {
+  display: grid;
+  grid-template-columns: 26px 74px 1fr 44px 52px 82px;
+  gap: 9px; align-items: center; font-size: 12px;
+  padding: 4px 0;
+}
+.macro-ai-rank-no {
+  font-family: var(--mono); font-size: 11px; color: var(--text-3); text-align: right;
+}
+.macro-ai-rank-name { color: var(--text); font-weight: 500; white-space: nowrap; }
+.macro-ai-rank-bar { height: 12px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.macro-ai-rank-bar i {
+  display: block; height: 100%; border-radius: 3px; background: var(--text-3);
+  /* 0 分的版塊條寬為 0，整條軌道空白會被誤讀成「沒有資料」。
+     給 2px 讓它至少是一個可見的刻度，而不是渲染失敗的樣子。 */
+  min-width: 2px;
+}
+.macro-ai-rank-bar i.q-leading { background: linear-gradient(90deg, #34a06a, #0b7a44); }
+.macro-ai-rank-bar i.q-weakening { background: linear-gradient(90deg, #e0a95a, #b45309); }
+.macro-ai-rank-bar i.q-lagging { background: linear-gradient(90deg, #d97070, #a82020); }
+.macro-ai-rank-bar i.q-improving { background: linear-gradient(90deg, #6b8fe8, #1d4ed8); }
+.macro-ai-rank-score { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); text-align: right; }
+.macro-ai-rank-quad {
+  font-size: 10.5px; text-align: center; padding: 1px 0; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-2); background: var(--surface);
+}
+.macro-ai-rank-quad.q-leading { color: #0b7a44; background: var(--down-soft); border-color: #b7e5cf; }
+.macro-ai-rank-quad.q-weakening { color: var(--warn); background: var(--warn-soft); border-color: #f2ddb4; }
+.macro-ai-rank-quad.q-lagging { color: #a82020; background: var(--up-soft); border-color: #f6c9c9; }
+.macro-ai-rank-quad.q-improving { color: var(--brand); background: var(--brand-soft); border-color: #c7d7fd; }
+.macro-ai-rank-flow {
+  font-size: 10.5px; white-space: nowrap; text-align: right;
+}
+.macro-ai-rank-flow.f-in { color: var(--down); }
+.macro-ai-rank-flow.f-out { color: var(--up); }
+.macro-ai-rank-flow.f-neu { color: var(--text-3); }
+
+.macro-ai-rank-note {
+  margin: 1px 0 5px; padding: 6px 9px 6px 35px;
+  font-size: 11.5px; line-height: 1.65; color: var(--text-2);
+  background: var(--warn-soft); border-left: 2px solid #f2ddb4; border-radius: 0 4px 4px 0;
+}
+.macro-ai-rank-foot {
+  margin: 10px 0 0; font-size: 11.5px; line-height: 1.75; color: var(--text-3);
+}
+.macro-ai-rank-foot b { color: var(--text-2); }
+.macro-ai-rank-empty { font-size: 12.5px; color: var(--text-3); }
+
+/* ---------- 宏觀關聯卡 ---------- */
+.macro-ai-links { display: grid; gap: 9px; }
+.macro-ai-link {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; background: var(--surface);
+  border-left: 3px solid var(--border-strong);
+}
+.macro-ai-link.v-ok { border-left-color: #34a06a; }
+.macro-ai-link.v-div { border-left-color: var(--warn); background: #fffdf8; }
+.macro-ai-link.is-na { background: var(--surface-2); border-left-color: var(--border); }
+.macro-ai-link-head {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.macro-ai-link-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.macro-ai-link-val { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.macro-ai-link-dir { font-size: 11.5px; }
+.macro-ai-link-dir.up { color: var(--up); }
+.macro-ai-link-dir.down { color: var(--down); }
+.macro-ai-link-dir.neutral { color: var(--text-3); }
+.macro-ai-link-pct { font-size: 11px; color: var(--text-3); }
+.macro-ai-link-verdict {
+  margin-left: auto; font-size: 10.5px; padding: 1.5px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-2);
+}
+.macro-ai-link-verdict.v-ok { color: #0b7a44; background: var(--down-soft); border-color: #b7e5cf; }
+.macro-ai-link-verdict.v-div { color: var(--warn); background: var(--warn-soft); border-color: #f2ddb4; }
+.macro-ai-link-thesis { margin: 0 0 7px; font-size: 12px; line-height: 1.75; color: var(--text); }
+.macro-ai-link-reason { margin: 0; font-size: 11.5px; color: var(--text-3); }
+.macro-ai-link-na { margin-left: auto; font-size: 10.5px; color: var(--text-3); }
+.macro-ai-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.chip-label { font-size: 10.5px; color: var(--text-3); flex: 0 0 auto; }
+.macro-ai-chip {
+  font-size: 10.5px; padding: 1.5px 7px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  white-space: nowrap;
+}
+.macro-ai-chip.is-sup { background: var(--down-soft); border-color: #b7e5cf; color: #0b7a44; }
+.macro-ai-chip.is-pre { background: var(--up-soft); border-color: #f6c9c9; color: #a82020; }
+.macro-ai-link-note {
+  margin: 5px 0 0; font-size: 11.5px; line-height: 1.65; color: var(--warn);
+}
+.macro-ai-link-src { margin-top: 7px; font-size: 10.5px; color: var(--text-3); }
+.macro-ai-link-empty { font-size: 12.5px; color: var(--text-3); }
+
+/* ---------- 一致性裁決 ---------- */
+.macro-ai-consistency {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 11px 13px; background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+}
+.macro-ai-consistency.v-ok { border-left-color: #34a06a; }
+.macro-ai-consistency.v-div { border-left-color: var(--warn); background: #fffdf8; }
+.macro-ai-consistency.v-un { border-left-color: var(--text-3); }
+.macro-ai-cons-head { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.macro-ai-cons-verdict { font-size: 13px; font-weight: 600; color: var(--text); }
+.macro-ai-consistency.v-div .macro-ai-cons-verdict { color: var(--warn); }
+.macro-ai-cons-basis { font-size: 10.5px; color: var(--text-3); }
+.macro-ai-cons-note { margin: 0 0 6px; font-size: 12.5px; line-height: 1.78; color: var(--text); }
+.macro-ai-cons-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-3); }
+
+/* ---------- 觀察重點 ---------- */
+.macro-ai-watch { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+.macro-ai-watch li { font-size: 12.5px; line-height: 1.72; color: var(--text-2); }
+
+@media (max-width: 720px) {
+  .macro-ai-rank-row { grid-template-columns: 22px 62px 1fr 40px; }
+  .macro-ai-rank-quad, .macro-ai-rank-flow { display: none; }
+  .macro-ai-rank-note { padding-left: 12px; }
+}
+
+/* ============================================================
+   個股財報（個股模塊；原在宏觀模塊，已搬移）
+   ------------------------------------------------------------
+   沿用 .macro-table 的表格樣式（顏色、字級、斑馬紋都一致），
+   只補卡片自己的間距與來源欄。表格欄位少一欄（無「歷史百分位」，
+   財報是絕對值不是百分位排名），所以 colgroup 與表頭也要對齊。
+   ============================================================ */
+
+.stock-fin-card {
+  margin-top: 18px;
+}
+
+.stock-fin-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stock-fin-sub {
+  margin: -2px 0 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.55;
+}
+
+/* 載入中：與其他卡片一致的置中轉圈 */
+.stock-fin-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 12px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* 空狀態：無資料不是錯誤，用中性色而非紅色 */
+.stock-fin-empty {
+  padding: 18px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.stock-fin-empty strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+.stock-fin-empty p {
+  margin: 0;
+  color: var(--text-3);
+}
+
+/* 財報表格：欄位比宏觀表少一欄，最小寬度也可以小一點 */
+.stock-fin-table {
+  min-width: 520px;
+}
+.stock-fin-table .mt-src {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* 頁腳：期間 / 代碼 / 產生時間 / 資料缺口 */
+.stock-fin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+.stock-fin-meta-item b {
+  margin-right: 5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.stock-fin-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
+/* 宏觀頁的範圍說明（原本那裡有個「查看個股財報」表單，現已搬走） */
+.mh-scope-note {
+  margin: 2px 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--brand);
+  border-radius: 6px;
+  background: var(--brand-soft);
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.65;
+}
+.mh-scope-note strong {
+  color: var(--text);
+}
+
+/* 行動版：財報表可橫向捲動，不要撐破卡片 */
+@media (max-width: 720px) {
+  .stock-fin-card { margin-top: 14px; }
+  .stock-fin-table { min-width: 460px; }
+  .stock-fin-table .mt-def { display: none; }  /* 定義文字在小螢幕太佔位 */
+  .stock-fin-meta { font-size: 11.5px; gap: 4px 12px; }
+  .stock-fin-head-right { gap: 6px; }
 }

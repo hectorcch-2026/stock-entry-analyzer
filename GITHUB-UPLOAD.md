@@ -25,7 +25,7 @@
 1. 開啟 <https://github.com/new>
 2. 填寫：
    - **Repository name**：`stock-entry-analyzer`
-   - **Description**（選填）：`美股與港股買入位與技術位分析系統`
+   - **Description**（選填）：`股票量化分析專業介面`
    - **Visibility**：建議 `Public`（Render 免費方案對私有庫也支援，但公開庫部署最順）
 3. **重要**：以下三個選項**全部不要勾**
    - ❌ Add a README file

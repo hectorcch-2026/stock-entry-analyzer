@@ -652,7 +652,19 @@ t('E12 視窗尺寸變化會重繪', () => {
 t('E13 Service Worker 已升版並納入新資源', () => {
   const m = sw.match(/^\s*const\s+VERSION\s*=\s*'([^']+)'/m);
   assert.ok(m, '找不到 VERSION');
-  assert.ok(m[1] >= 'v1.0.7', `VERSION 為 ${m[1]}，應 >= v1.0.7`);
+  /* 必須逐段比數字，不能直接比字串：
+     'v1.0.10' < 'v1.0.7' 在字串比較下成立（'1' < '7'），
+     版號一到兩位數就會誤判成「沒升版」。 */
+  const num = (v) => (v.match(/\d+/g) || []).map(Number);
+  const cmp = (a, b) => {
+    const x = num(a), y = num(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  };
+  assert.ok(cmp(m[1], 'v1.0.7') >= 0, `VERSION 為 ${m[1]}，應 >= v1.0.7`);
   assert.ok(sw.includes("'/rrg-treemap.js'"), 'SHELL_ASSETS 未包含 rrg-treemap.js');
 });
 

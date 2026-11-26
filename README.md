@@ -1,4 +1,4 @@
-# 美股與港股 買入位與技術位分析系統
+# 股票量化分析專業介面
 
 即時查詢美股 / 港股，自動計算建議買入價位區間、關鍵技術位（支撐、壓力、各週期均線、近期高低點），
 並以近兩年日線歷史回測推估進場勝率與獲利機率。響應式設計，手機 / 平板 / 桌機皆可操作。
@@ -143,7 +143,13 @@ stock-entry-analyzer/
 ├── public/
 │   ├── index.html         # 版面結構、PWA meta、iOS 引導
 │   ├── styles.css         # 響應式樣式（含 safe-area-inset 安全區域處理）
+│   ├── common.js          # 共用工具與 hash 路由
 │   ├── app.js             # 前端邏輯、Canvas K 線圖、SW 註冊、離線狀態、資料新鮮度
+│   ├── macro.js           # 宏觀頁（全市場儀表板：指標 / 資料字典 / AI 解讀）
+│   ├── stock-fin.js       # 個股財報卡（個股詳情頁用，見下方「模塊歸屬」）
+│   ├── news-ai.js         # 新聞與 AI 分析卡
+│   ├── rrg-client.js      # 版塊輪動（RRG）
+│   ├── screen.js          # AI 選股
 │   ├── sw.js              # Service Worker（分流快取策略）
 │   ├── manifest.webmanifest
 │   └── icons/             # PWA 圖示（192 / 512 / maskable / apple-touch / favicon）
@@ -152,9 +158,24 @@ stock-entry-analyzer/
     ├── e2e-pwa.mjs        # 本地 PWA / SW / 離線
     ├── e2e-ios-standalone.mjs  # iPhone 加入主畫面後的獨立視窗模式
     ├── e2e-deployed.mjs   # 公網 HTTPS 部署驗證
+    ├── rename-and-move.cjs # 專案更名與財報模塊搬移的驗收測試（不依賴伺服器）
     ├── e2e-flow.mjs / e2e-layout.mjs / e2e-detail.mjs / e2e-notify.mjs
     └── analyzer-check.cjs # 分析器離線邏輯檢查
 ```
+
+### 模塊歸屬：為什麼財報在個股頁、不在宏觀頁
+
+財報的資料粒度是「一家公司」，會隨股票代碼變動；宏觀頁的粒度是「全市場」。
+兩者若放在同一頁面，一旦輸入代碼，整頁（含 FOMC、資料限制說明、AI 解讀）
+都會被換成單一公司的內容，宏觀資料形同被覆蓋掉。因此：
+
+| 路由 | 責任 | 說明 |
+|---|---|---|
+| `#/macro` | 宏觀（全市場） | 純宏觀儀表板，不帶股票代碼 |
+| `#/detail/:symbol` | 個股 | 技術面分析 + 個股財報卡 + 新聞 AI 分析 |
+| `#/macro/:symbol` | （舊網址） | 保留但**自動轉址**到 `#/detail/:symbol`，不讓舊連結失效 |
+
+後端 `GET /api/macro/:symbol` 未變動，回應結構與欄位完全保留。
 
 ### Service Worker 快取策略（分流設計）
 
@@ -646,6 +667,7 @@ npm run test:v14                   # 三頁導航、圖表縮放、AI 選股、�
 npm run test:ac01                  # 既有分析輸出不因 FP 改變的雜湊回歸（15 項）
 npm run test:forecast              # 預測模組單元測試與門檻行為（24 項）
 npm run test:pwa                   # PWA：manifest、圖示、Service Worker、離線行為（33 項）
+npm run test:rename                # 專案更名零殘留 + 財報模塊歸屬（33 項，不需連網）
 npm run test:layout                # 三種螢幕尺寸版面與渲染驗證
 npm run test:flow                  # 自動完成、載入狀態、圖表切換
 npm run test:notify                # 通知切換與錯誤提示

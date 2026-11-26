@@ -1,5 +1,5 @@
 /* ===================================================
-   買入位與技術位分析系統 — 前端應用
+   股票量化分析專業介面 — 前端應用
    零外部依賴：搜尋自動完成、Canvas K 線圖、響應式渲染
    =================================================== */
 (function () {
@@ -611,6 +611,22 @@
 
     // --- 進階技術分析四模組 ---
     renderAdvanced(d);
+
+    /* --- 新聞與 AI 分析（獨立模組，載入失敗不影響本頁其他區塊）---
+       為什麼延到這裡才觸發：這段請求要抓新聞（4 個來源並行）再跑 AI，
+       正常 1–7 秒，比行情慢得多。若在 render 開頭就發，使用者會看到
+       「整頁都好了但新聞區一直在轉」。放在最後讓主要畫面先出來。 */
+    if (window.NewsAi) {
+      window.NewsAi.loadNewsAi(m.symbol, { name: m.name || m.shortName || null });
+    }
+
+    /* --- 個股財報（原在宏觀模塊，已移至個股模塊）---
+       與新聞區同理由此觸發：SEC EDGAR 抓取＋XBRL 解析通常 1–3 秒，
+       比行情慢。放最後讓主要分析結果先出來；失敗也只影響本卡片。 */
+    if (window.StockFin) {
+      window.StockFin.bind();
+      window.StockFin.onStock(m.symbol);
+    }
 
     // --- 頁腳 ---
     var upDate = new Date(d.dataUpdatedAt);
@@ -2841,6 +2857,8 @@
         document.body.classList.remove('detail-mode');
         // 從詳情頁返回時保留已載入的結果，不清空（使用者會期待畫面還在）
         setStatus(state.data ? '已更新' : '就緒', state.data ? 'ok' : null);
+        // 財報卡跟著結果區塊一起顯示／隱藏，避免殘留上一檔的財報
+        if (window.StockFin && !state.data) window.StockFin.clear();
       },
       onDetail: function (symbol) {
         $('detailBar').hidden = false;
