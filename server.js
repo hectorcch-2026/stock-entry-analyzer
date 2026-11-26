@@ -42,6 +42,8 @@ const econSync = require('./lib/econ-sync');
 const rrg = require('./lib/rrg');
 const rrgService = require('./lib/rrg-service');
 const sectorHoldings = require('./lib/sector-holdings');
+const treemap = require('./lib/treemap');
+const treemapService = require('./lib/treemap-service');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1108,6 +1110,101 @@ const server = http.createServer(async (req, res) => {
         failures: ret.failures,
         source: h.source,
         holdingsCached: !!h.cached,
+      });
+    }
+
+    /**
+     * 版塊 Treemap（矩形樹狀圖）
+     * ────────────────────────────────────────────────────────
+     * GET /api/rrg/treemap?period=m1&sectors=XLK,XLF&perSector=10
+     *
+     * 為什麼四個週期合成一支端點（回傳所有週期都算好）：
+     *   若前端每切一次週期就打一次 API，切換會有 1～3 秒延遲，
+     *   而需求明確要求「切換後即時更新」。實測四個週期共用同一次
+     *   行情抓取（251 根 K 棒已經包含 1/5/21 根的資訊），
+     *   多算三個週期的成本是**零**——只是同一組序列多取三個索引。
+     *
+     * 因此設計成：一次請求回傳全部週期，前端切換是純本地重繪。
+     * 這也讓「快速連點日→週→月→年」不會產生四個競態請求。
+     *
+     * 參數：
+     *   period     d1|w1|m1|y1（預設 m1）——決定預設顯示哪個週期，不影響回傳內容
+     *   sectors    逗號分隔版塊代碼（預設全部 11 個）
+     *   perSector  每版塊檔數 1–30（預設 10）
+     *   refresh=1  略過快取
+     */
+    if (pathname === '/api/rrg/treemap' && req.method === 'GET') {
+      // 版塊驗證：與 /api/rrg 共用同一套規則，避免兩邊各自為政
+      const sectorCheck = rrg.normSectors(q.sectors);
+      if (!sectorCheck.ok) {
+        return sendError(res, 400, sectorCheck.code, sectorCheck.message, sectorCheck.hint);
+      }
+      if (!sectorCheck.keys.length) {
+        return sendError(res, 400, 'NO_SECTORS', '版塊清單為空，無法繪圖',
+          `可用版塊：${rrg.SECTORS.map((s) => s.key).join(', ')}`);
+      }
+
+      const periodRaw = q.period == null || q.period === '' ? 'm1' : String(q.period).toLowerCase();
+      if (!treemap.PERIOD_KEYS.includes(periodRaw)) {
+        return sendError(res, 400, 'BAD_PERIOD',
+          `不支援的週期「${q.period}」`,
+          `可用週期：${treemap.PERIODS.map((p) => `${p.key}（${p.full}）`).join('、')}`);
+      }
+
+      let perSector = treemap.DEFAULT_PER_SECTOR;
+      const tsRaw = q.perSector;
+      if (tsRaw != null && tsRaw !== '') {
+        const n = Number(tsRaw);
+        if (!Number.isFinite(n) || n < 1 || n > treemap.MAX_PER_SECTOR) {
+          return sendError(res, 400, 'BAD_PER_SECTOR',
+            `perSector 必須是 1–${treemap.MAX_PER_SECTOR} 的整數（收到「${tsRaw}」）`,
+            `不帶此參數時預設每版塊前 ${treemap.DEFAULT_PER_SECTOR} 檔`);
+        }
+        perSector = Math.floor(n);
+      }
+
+      const sectorMeta = {};
+      for (const s of rrg.SECTORS) sectorMeta[s.key] = s;
+
+      let data;
+      try {
+        data = await treemapService.getTreemap(datasource, {
+          sectors: sectorCheck.keys,
+          perSector,
+          period: periodRaw,
+          refresh: q.refresh === '1',
+          sectorMeta,
+        });
+      } catch (e) {
+        return sendError(res, 503, e.code || 'TREEMAP_FAILED', e.message, e.hint);
+      }
+
+      /* 四個週期一次算好，前端切換零延遲。
+         做法：把每個葉節點的四個週期數值都附上。 */
+      const periods = treemap.PERIODS.map((p) => ({
+        key: p.key, label: p.label, full: p.full, tradingDays: p.tradingDays,
+      }));
+
+      return sendJSON(res, 200, {
+        ...data,
+        periods,
+        /* 圖例刻度：每個週期的分級門檻，讓前端能畫出「顏色 ↔ 漲跌幅」對照。
+           由後端提供而不是前端寫死，確保圖例與實際著色永遠一致。 */
+        legend: treemap.PERIODS.map((p) => ({
+          key: p.key,
+          label: p.label,
+          full: p.full,
+          thresholdPct: treemap.SCALE[p.key],
+          levels: treemap.LEVELS,
+          // 各級別的門檻值（由淺到深），供圖例標示
+          steps: Array.from({ length: treemap.LEVELS }, (_, i) => ({
+            level: i + 1,
+            minPct: (treemap.SCALE[p.key] / treemap.LEVELS) * i,
+            maxPct: i === treemap.LEVELS - 1
+              ? treemap.SCALE[p.key]
+              : (treemap.SCALE[p.key] / treemap.LEVELS) * (i + 1),
+          })),
+        })),
       });
     }
 

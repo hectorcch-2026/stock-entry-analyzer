@@ -949,6 +949,39 @@
       </p>
     </section>
 
+    <!-- 版塊 Treemap -->
+    <section class="card rrg-tm-card">
+      <header class="card-head">
+        <h2>版塊熱力圖</h2>
+        <div class="rrg-tm-tools">
+          <div class="rrg-tm-periods" id="rrgTmPeriods" role="group" aria-label="時間週期">
+            <!-- 週期按鈕由 JS 依 API 回傳的 periods 產生，避免兩處各自維護 -->
+          </div>
+        </div>
+      </header>
+
+      <p class="rrg-tm-meta" id="rrgTmMeta">載入中…</p>
+
+      <div class="rrg-tm-wrap" id="rrgTmWrap">
+        <canvas id="rrgTmCanvas" role="img"
+                aria-label="版塊市值熱力圖：面積代表市值，顏色代表漲跌幅"></canvas>
+        <div id="rrgTmTip" class="rrg-tm-tip" hidden></div>
+        <div id="rrgTmEmpty" class="rrg-tm-empty" hidden>
+          <p class="rrg-tm-empty-title">尚無資料</p>
+          <p class="rrg-tm-empty-msg">請稍候或按「重新整理」。</p>
+        </div>
+      </div>
+
+      <!-- 圖例：顏色 ↔ 漲跌幅 -->
+      <div class="rrg-tm-legend" id="rrgTmLegend" aria-label="顏色圖例"></div>
+
+      <p class="rrg-foot">
+        <span class="rrg-foot-item"><b>面積</b>為各版塊前 N 大持股的總市值，非該版塊完整市值。</span>
+        <span class="rrg-foot-item"><b>顏色</b>為所選週期的漲跌幅深淺（紅漲綠跌）。色階門檻隨週期調整，月線與年線的幅度本來就比日線大，故不可跨週期比較顏色深淺。</span>
+        <span class="rrg-foot-item">滑鼠移到格子上可看版塊、市值佔比與漲跌幅；點擊可跳到該股 AI 分析頁。</span>
+      </p>
+    </section>
+
     <!-- 版塊明細表 -->
     <section class="card rrg-table-card">
       <header class="card-head">
@@ -989,5 +1022,6 @@
 <script src="/screen.js"></script>
 <script src="/macro.js"></script>
 <script src="/rrg-client.js"></script>
+<script src="/rrg-treemap.js"></script>
 </body>
 </html>

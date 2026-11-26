@@ -2405,3 +2405,159 @@ div.fomc-next {
   .rrg-hold-tools { display: none; }
   .rrg-hold-table { min-width: 0; }
 }
+
+/* ===================================================
+   版塊熱力圖 Treemap
+   ---------------------------------------------------
+   版面分三塊：週期按鈕（卡片標頭）、畫布、圖例。
+   顏色由 JS 依資料算出後直接寫在 canvas 上，
+   因此這裡不負責漲跌色，只負責容器與週邊元件。
+   =================================================== */
+
+.rrg-tm-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* 週期切換：日／週／月／年 */
+.rrg-tm-periods {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.rrg-tm-pbtn {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12.5px; line-height: 1;
+  padding: 6px 14px; border-radius: 7px;
+  color: var(--text-2); font-weight: 500;
+  transition: background .12s ease, color .12s ease;
+}
+.rrg-tm-pbtn:hover { background: rgba(16, 24, 40, .05); color: var(--text); }
+.rrg-tm-pbtn:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: -2px;
+}
+/* 選中態：白底 + 陰影，在任何底色上都看得出來 */
+.rrg-tm-pbtn.on {
+  background: var(--surface); color: var(--text); font-weight: 700;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
+}
+
+.rrg-tm-meta {
+  margin: 0 0 10px; font-size: 12px; color: var(--text-3); line-height: 1.7;
+}
+.rrg-tm-meta b { color: var(--text); font-weight: 600; }
+.rrg-tm-meta.err { color: var(--warn); }
+.rrg-tm-up { color: var(--up); font-weight: 600; }
+.rrg-tm-down { color: var(--down); font-weight: 600; }
+.rrg-tm-nd { color: var(--text-3); }
+.rrg-tm-warn { color: var(--warn); }
+.rrg-tm-err-msg { color: var(--warn); font-weight: 600; }
+.rrg-tm-err-hint { color: var(--text-3); }
+
+.rrg-tm-retry {
+  appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 3px 10px; margin-left: 4px;
+  border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text-2);
+}
+.rrg-tm-retry:hover { border-color: var(--brand); color: var(--brand); }
+
+/* 畫布容器：position:relative 供 tooltip 定位 */
+.rrg-tm-wrap {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  /* 畫布本身有白框，容器不再加邊框以免雙線 */
+  background: var(--surface-2);
+}
+.rrg-tm-wrap canvas { display: block; }
+
+/* 空狀態／錯誤遮罩 */
+.rrg-tm-empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; text-align: center; padding: 24px;
+  background: rgba(248, 250, 252, .92);
+}
+.rrg-tm-empty-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.rrg-tm-empty-msg { margin: 0; font-size: 12.5px; color: var(--text-3); }
+
+/* Tooltip：fixed 定位（以視窗為硬約束，不受容器 overflow 裁切） */
+.rrg-tm-tip {
+  position: fixed;
+  z-index: 60;
+  min-width: 190px; max-width: 260px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  font-size: 12px; color: var(--text);
+  line-height: 1.5;
+}
+.rrg-tm-tip-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; }
+.rrg-tm-tip-tick { font-family: var(--mono); font-weight: 700; font-size: 13px; }
+.rrg-tm-tip-name {
+  color: var(--text-2); font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rrg-tm-tip-sec {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-2); margin-bottom: 6px;
+}
+.rrg-tm-tip-sec i {
+  width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto;
+}
+.rrg-tm-tip-list { margin: 0; padding: 0; display: grid; gap: 3px; }
+.rrg-tm-tip-list > div {
+  display: flex; justify-content: space-between; gap: 12px;
+}
+.rrg-tm-tip-list dt { margin: 0; color: var(--text-3); }
+.rrg-tm-tip-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.rrg-tm-tip-pct.up { color: var(--up); }
+.rrg-tm-tip-pct.down { color: var(--down); }
+.rrg-tm-tip-pct.flat { color: var(--text-2); }
+.rrg-tm-tip-pct.none { color: var(--text-3); font-weight: 500; }
+.rrg-tm-tip-foot {
+  margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-3);
+}
+
+/* 圖例 */
+.rrg-tm-legend { margin-top: 12px; }
+.rrg-tm-leg-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 5px;
+}
+.rrg-tm-leg-title { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.rrg-tm-leg-range { font-size: 11.5px; color: var(--text-3); }
+.rrg-tm-leg-bar {
+  display: flex; height: 12px; border-radius: 4px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.rrg-tm-leg-bar i { flex: 1 1 0; display: block; }
+.rrg-tm-leg-foot {
+  display: flex; justify-content: space-between;
+  margin-top: 3px; font-size: 11px; color: var(--text-3);
+}
+.rrg-tm-leg-nodata {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; font-size: 11.5px; color: var(--text-3);
+}
+.rrg-tm-leg-nodata i {
+  width: 10px; height: 10px; border-radius: 3px;
+  border: 1px solid var(--border); flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .rrg-tm-tools { width: 100%; }
+  .rrg-tm-periods { width: 100%; }
+  .rrg-tm-pbtn { flex: 1 1 0; padding: 7px 0; text-align: center; }
+  /* 手機上 tooltip 可能比游標還寬，縮小並限制最大寬度 */
+  .rrg-tm-tip { max-width: 220px; min-width: 160px; font-size: 11.5px; }
+}
+
+@media print {
+  .rrg-tm-tools { display: none; }
+  .rrg-tm-tip { display: none !important; }
+  .rrg-tm-wrap { break-inside: avoid; }
+}

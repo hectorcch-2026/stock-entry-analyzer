@@ -1030,7 +1030,12 @@
       });
     }
     if (el.refresh) {
-      el.refresh.addEventListener('click', function () { load({ refresh: true }); });
+      el.refresh.addEventListener('click', function () {
+        load({ refresh: true });
+        /* 一併重新載入 Treemap：使用者按「重新整理」是想要全部更新，
+           只更新四象限圖而留下舊熱力圖，會讓人以為熱力圖壞了。 */
+        if (global.RrgTreemap && global.RrgTreemap.refresh) global.RrgTreemap.refresh();
+      });
     }
 
     /* 視窗尺寸變化時重繪（畫布是像素尺寸，不重繪會模糊或錯位） */
@@ -1045,6 +1050,12 @@
   var started = false;
 
   function onEnter() {
+    /* Treemap 為獨立模組（public/rrg-treemap.js），每次進入都要呼叫：
+       它自己會判斷是否已有資料，且需要重新量測容器寬高。
+       放在 started 判斷之前，因為使用者在其他檢視改變視窗大小後
+       回到本頁時，Treemap 的畫布也必須重繪。 */
+    if (global.RrgTreemap && global.RrgTreemap.enter) global.RrgTreemap.enter();
+
     if (started) return;   /* 回到本頁不重抓；有快取也幾乎是瞬間 */
     started = true;
     if (!el.canvas) cacheEl();
