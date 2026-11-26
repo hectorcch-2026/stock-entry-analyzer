@@ -24,6 +24,8 @@
     "test:pred": "node tests/e2e-pred.mjs",
     "test:v14": "node tests/e2e-v14-ui.mjs",
     "test:detail": "node tests/e2e-detail.mjs",
+    "test:reasons": "node scripts/verify-reasons.mjs",
+    "test:live": "node scripts/verify-render-live.mjs",
     "verify:intervals": "node scripts/verify-intervals.js",
     "test:fp": "node tests/forecast-unit.cjs && node scripts/test-gate-negative.js && node scripts/verify-intervals.js"
   },

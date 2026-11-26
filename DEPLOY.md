@@ -173,3 +173,51 @@ git push
 ```
 
 Render 約 1–2 分鐘完成，Railway 約 30–60 秒。
+
+---
+
+## 八、線上站台現況（Render）
+
+- 網址：https://stock-entry-analyzer.onrender.com
+- 來源：GitHub `hectorcch-2026/stock-entry-analyzer` 分支 `main`，`autoDeploy: true`
+- 目前版本：`f509093`（v1.4：K 線預測與 AI 選股）
+
+### 線上驗收
+
+```bash
+npm run test:live     # 對 Render 站台跑 26 項驗收（含 API、UI、手機版）
+```
+
+也可指定其他站台：
+
+```bash
+BASE=https://你的網址 npm run test:live
+```
+
+本機另有 `npm run test:reasons`，驗證「篩選無結果」的原因說明與放寬建議。
+
+### 與 WorkBuddy 版的行為差異（實測）
+
+**預測功能在 Render 可用，在 WorkBuddy 沙箱不可用。** 這是兩邊差異最大的一項：
+
+| 項目 | WorkBuddy 沙箱 | Render |
+|---|---|---|
+| `pred.status` | `unavailable` | `ok` |
+| 統計可信度 | 無法計算（顯示原因） | 可計算（AAPL 為 100 / 高） |
+| K 線來源 | tencent | yahoo |
+| 5 年 K 線 | 不支援 | 支援（約 1229 根） |
+
+原因不是程式差異，而是出網限制：預測需要 10 年**復權**序列做滾動校準，
+沙箱只能連上騰訊，而騰訊不支援 10 年且不提供復權價（`adj: 'none'`）。
+依「寧可沒有預測，也不要錯的預測」原則，沙箱上會明確降級並顯示原因，
+而不是給出未經校準的區間。
+
+### 免費方案注意事項
+
+Render 免費方案閒置後會休眠，冷啟動首次請求約需 30–60 秒。
+`/api/health` 是健康檢查路徑，可用來喚醒服務：
+
+```bash
+curl https://stock-entry-analyzer.onrender.com/api/health
+```
+
