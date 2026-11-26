@@ -39,6 +39,8 @@ const credibility = require('./lib/credibility');
 const macro = require('./lib/macro');
 const interpret = require('./lib/interpret');
 const econSync = require('./lib/econ-sync');
+const rrg = require('./lib/rrg');
+const rrgService = require('./lib/rrg-service');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -910,6 +912,104 @@ const server = http.createServer(async (req, res) => {
       }
 
       return sendError(res, 400, 'BAD_SCOPE', `不支援的 scope：${scope}`, '可用：macro、fundamentals');
+    }
+
+    /**
+     * RRG 版塊輪動地圖
+     * ────────────────────────────────────────────────────────
+     * GET /api/rrg?timeframe=weekly&window=1y&trail=5&period=14
+     *             &benchmark=SPY&sectors=XLK,XLF&refresh=1
+     *
+     * 參數全部可省略，一律走 lib/rrg.js 的預設值。
+     * 非法值不靜默忽略 —— 回 400 並在 hint 列出合法選項，
+     * 因為「打了錯字卻得到一張看起來正常的圖」比報錯更危險。
+     */
+    if (pathname === '/api/rrg' && req.method === 'GET') {
+      const tf = rrg.normTimeframe(q.timeframe);
+      if (!tf.ok) return sendError(res, 400, tf.code, tf.message, tf.hint);
+
+      const win = rrg.normWindow(q.window, tf.key);
+      if (!win.ok) return sendError(res, 400, win.code, win.message, win.hint);
+
+      const trail = rrg.normTrail(q.trail);
+      if (!trail.ok) return sendError(res, 400, trail.code, trail.message, trail.hint);
+
+      const period = rrg.normPeriod(q.period, tf.key);
+      if (!period.ok) return sendError(res, 400, period.code, period.message, period.hint);
+
+      const bench = rrg.normBenchmark(q.benchmark);
+      if (!bench.ok) return sendError(res, 400, bench.code, bench.message, bench.hint);
+
+      const sec = rrg.normSectors(q.sectors);
+      if (!sec.ok) return sendError(res, 400, sec.code, sec.message, sec.hint);
+      if (!sec.keys.length) {
+        return sendError(res, 400, 'NO_SECTORS', '版塊清單為空，無法繪圖',
+          `可用版塊：${rrg.SECTORS.map((s) => s.key).join(', ')}`);
+      }
+
+      if (q.refresh === '1') rrgService.resetCache();
+
+      const m = await rrgService.getMatrix(datasource, {
+        timeframe: tf.key, benchmarkKey: bench.key,
+      });
+      if (!m.ok) return sendError(res, 503, m.code, m.message, m.hint);
+
+      const out = rrg.buildRRG({
+        dates: m.dates,
+        t: m.t,
+        rows: m.rows,
+        benchmarkKey: bench.key,
+        sectorKeys: sec.keys,
+        period: period.value,
+        windowBars: win.bars,
+        trail: trail.value,
+        meta: { sectors: rrg.SECTORS },
+      });
+
+      if (!out.ok) {
+        // INSUFFICIENT_DATA 屬「資料真的不夠」，用 422 與其他模組一致
+        const status = out.code === 'INSUFFICIENT_DATA' ? 422 : 503;
+        return sendJSON(res, status, {
+          ok: false,
+          error: { code: out.code, message: out.message, hint: out.hint },
+          coverage: out.coverage || [],
+          diagnostics: out.diagnostics || null,
+        });
+      }
+
+      return sendJSON(res, 200, {
+        ok: true,
+        timeframe: tf.key,
+        timeframeLabel: rrg.TIMEFRAMES[tf.key].label,
+        window: win.key,
+        windowLabel: rrg.WINDOWS[win.key].label,
+        windowNote: win.note || null,
+        trail: trail.value,
+        period: period.value,
+        periodIsDefault: !!period.isDefault,
+        benchmark: bench.key,
+        benchmarkLabel: bench.def.label,
+        benchmarkNote: bench.def.note,
+        asOf: out.points[0] ? out.points[0].asOf : null,
+        points: out.points,
+        coverage: out.coverage,
+        diagnostics: out.diagnostics,
+        // 資料健全度：前端需要主動提示，不能假裝沒這回事
+        unknownSectors: sec.unknown,
+        failures: m.failures,
+        adjFallback: m.adjFallback,
+        source: m.source,
+        cached: !!m.cached,
+        fetchedAt: m.fetchedAt,
+        meta: {
+          sectors: rrg.SECTORS,
+          benchmarks: rrg.BENCHMARKS,
+          timeframes: Object.entries(rrg.TIMEFRAMES).map(([k, v]) => ({ key: k, label: v.label })),
+          windows: Object.entries(rrg.WINDOWS).map(([k, v]) => ({ key: k, label: v.label })),
+          trailMin: rrg.TRAIL_MIN,
+          trailMax: rrg.TRAIL_MAX,
+        },
+      });
     }
 
     if (pathname === '/api/notify' && req.method === 'POST') {

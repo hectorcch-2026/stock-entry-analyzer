@@ -45,6 +45,7 @@
       <a href="#/predict" data-route="predict" class="nav-item active">K 線預測</a>
       <a href="#/screen" data-route="screen" class="nav-item">AI 選股</a>
       <a href="#/macro" data-route="macro" class="nav-item">宏觀與基本面</a>
+      <a href="#/rrg" data-route="rrg" class="nav-item">版塊輪動</a>
       <a href="#/predict" data-route="detail" class="nav-item nav-detail" hidden>個股詳情</a>
     </nav>
 
@@ -818,11 +819,126 @@
 
   </div><!-- /#viewMacro -->
 
+  <!-- ============ 檢視四：版塊輪動（RRG） ============ -->
+  <div id="viewRrg" hidden>
+
+    <section class="card rrg-head-card">
+      <div class="mh-row">
+        <div class="mh-title">
+          <h2 id="rrgTitle">美股版塊輪動地圖</h2>
+          <p class="mh-sub" id="rrgSub">
+            相對強度（RS）＝版塊復權收盤 ÷ 基準收盤，經雙指數平滑（DEMA）後標準化為 100。
+            順時針輪動：領先 → 弱化 → 落後 → 改善。
+          </p>
+        </div>
+        <div class="mh-actions">
+          <span class="mh-stamp" id="rrgStamp">—</span>
+          <button type="button" id="rrgRefresh" class="btn btn-ghost btn-sm">
+            <span class="spinner" hidden aria-hidden="true"></span>
+            <span class="btn-label">重新整理</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 控制列 -->
+      <div class="rrg-controls">
+        <div class="rrg-ctrl">
+          <label for="rrgTimeframe">時間週期</label>
+          <select id="rrgTimeframe" class="rrg-select"></select>
+        </div>
+        <div class="rrg-ctrl">
+          <label for="rrgWindow">觀察區間</label>
+          <select id="rrgWindow" class="rrg-select"></select>
+        </div>
+        <div class="rrg-ctrl">
+          <label for="rrgBenchmark">基準指數</label>
+          <select id="rrgBenchmark" class="rrg-select"></select>
+        </div>
+        <div class="rrg-ctrl">
+          <label for="rrgTrail">尾跡長度 <b id="rrgTrailVal">5</b> 期</label>
+          <input id="rrgTrail" class="rrg-range" type="range" min="2" max="20" step="1" value="5">
+        </div>
+        <div class="rrg-ctrl">
+          <label for="rrgPeriod">平滑週期 <b id="rrgPeriodVal">14</b></label>
+          <input id="rrgPeriod" class="rrg-range" type="range" min="3" max="40" step="1" value="14">
+        </div>
+      </div>
+
+      <!-- 版塊勾選 -->
+      <details class="rrg-sectors" id="rrgSectorBox">
+        <summary>
+          <span id="rrgSectorSummary">已選 11 個版塊</span>
+          <span class="rrg-sectors-hint">點擊展開／收起</span>
+        </summary>
+        <div class="rrg-sector-chips" id="rrgSectorChips"></div>
+      </details>
+    </section>
+
+    <!-- 狀態 / 提示列 -->
+    <div id="rrgNotice" class="rrg-notice" hidden></div>
+
+    <!-- 圖表 + 明細 -->
+    <section class="card rrg-chart-card">
+      <header class="card-head">
+        <h2>四象限輪動圖</h2>
+        <div class="rrg-legend" id="rrgLegend"></div>
+      </header>
+
+      <div class="rrg-chart-wrap" id="rrgChartWrap">
+        <canvas id="rrgCanvas" role="img"
+                aria-label="版塊相對強度四象限輪動圖，橫軸為 RS-Ratio、縱軸為 RS-Momentum"></canvas>
+        <div id="rrgTip" class="rrg-tip" hidden></div>
+        <div id="rrgEmpty" class="rrg-empty" hidden>
+          <p class="rrg-empty-title">尚無資料</p>
+          <p class="rrg-empty-msg">請稍候或按「重新整理」。</p>
+        </div>
+      </div>
+
+      <p class="rrg-foot">
+        <span class="rrg-foot-item"><b>象限</b>以 (100, 100) 為中心。右上領先、右下弱化、左下落後、左上改善。</span>
+        <span class="rrg-foot-item"><b>尾跡</b>由舊到新，末端圓點為最新一期。方向、長度、彎曲程度反映動能強弱與轉向。</span>
+      </p>
+    </section>
+
+    <!-- 版塊明細表 -->
+    <section class="card rrg-table-card">
+      <header class="card-head">
+        <h2>版塊狀態明細</h2>
+        <span class="rrg-table-hint">點列可高亮該版塊</span>
+      </header>
+      <div class="rrg-table-wrap">
+        <table class="rrg-table" id="rrgTable">
+          <thead>
+            <tr>
+              <th scope="col">版塊</th>
+              <th scope="col" class="num">RS-Ratio</th>
+              <th scope="col" class="num">RS-Mom</th>
+              <th scope="col">象限</th>
+              <th scope="col" class="num">尾跡位移</th>
+              <th scope="col" class="num">每期</th>
+              <th scope="col" class="num">直線度</th>
+              <th scope="col">動能判讀</th>
+              <th scope="col">下一步</th>
+            </tr>
+          </thead>
+          <tbody id="rrgTableBody">
+            <tr><td colspan="9" class="rrg-table-empty">載入中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 資料健全度 -->
+    <div id="rrgDiag" class="rrg-diag" hidden></div>
+
+  </div><!-- /#viewRrg -->
+
 </main>
 
 <script src="/common.js"></script>
 <script src="/app.js"></script>
 <script src="/screen.js"></script>
 <script src="/macro.js"></script>
+<script src="/rrg-client.js"></script>
 </body>
 </html>

@@ -28,7 +28,9 @@
 // v1.0.4：圖表呈現規格書 v1.1 落地——L0 現價基準線、L1/L1-T/L2/L3
 //         四層視覺層級與 5 條配額、Y 軸視口裁切＋邊緣箭頭、三模式切換、
 //         行動端固定資訊列。index.html / app.js / styles.css 全改，必須升版。
-const VERSION = 'v1.0.4';
+// v1.0.5：新增 RRG 版塊輪動頁（index.html / common.js / styles.css /
+//         新增 rrg-client.js 四者皆變動），必須升版否則舊用戶拿到舊殼。
+const VERSION = 'v1.0.5';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
@@ -42,6 +44,10 @@ const SHELL_ASSETS = [
   '/index.html',
   '/styles.css',
   '/app.js',
+  '/common.js',
+  '/screen.js',
+  '/macro.js',
+  '/rrg-client.js',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

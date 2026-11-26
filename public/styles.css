@@ -2044,3 +2044,270 @@ div.fomc-next {
   .macro-table, .dict-table { min-width: 0; }
   .macro-notice, .mh-tabs, .mh-search { display: none; }
 }
+
+/* ============================================================
+   RRG 版塊輪動地圖
+   ============================================================ */
+
+.rrg-controls {
+  display: flex; flex-wrap: wrap; gap: 14px 18px;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.rrg-ctrl { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.rrg-ctrl > label {
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+  letter-spacing: .2px; white-space: nowrap;
+}
+.rrg-ctrl > label b { color: var(--brand); font-family: var(--mono); }
+
+.rrg-select {
+  appearance: none;
+  font: inherit; font-size: 13px; color: var(--text);
+  padding: 7px 30px 7px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--surface);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238a94a6' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 10px center;
+  cursor: pointer; min-width: 108px;
+}
+.rrg-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+.rrg-range {
+  -webkit-appearance: none; appearance: none;
+  width: 130px; height: 22px; background: transparent; cursor: pointer;
+}
+.rrg-range::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 999px; background: #e3e8ef;
+}
+.rrg-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; margin-top: -5px; border-radius: 50%;
+  background: var(--brand); border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(16,24,40,.28);
+}
+.rrg-range::-moz-range-track { height: 5px; border-radius: 999px; background: #e3e8ef; }
+.rrg-range::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--brand); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(16,24,40,.28);
+}
+.rrg-range:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+
+/* ---- 版塊勾選 ---- */
+.rrg-sectors { margin-top: 12px; }
+.rrg-sectors > summary {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; cursor: pointer; list-style: none;
+  font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.rrg-sectors > summary::-webkit-details-marker { display: none; }
+.rrg-sectors > summary::after {
+  content: "▾"; color: var(--text-3); font-size: 11px; transition: transform .16s;
+}
+.rrg-sectors[open] > summary::after { transform: rotate(180deg); }
+.rrg-sectors-hint { font-weight: 400; color: var(--text-3); font-size: 11.5px; }
+
+.rrg-sector-chips {
+  display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px 2px;
+}
+.rrg-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px 5px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; color: var(--text-3); user-select: none;
+  transition: border-color .14s, background .14s, color .14s;
+}
+.rrg-chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+.rrg-chip.on { border-color: var(--border-strong); background: var(--surface-2); color: var(--text); }
+.rrg-chip.on .rrg-chip-k { font-weight: 700; }
+.rrg-chip-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  opacity: .4; transition: opacity .14s;
+}
+.rrg-chip.on .rrg-chip-dot { opacity: 1; }
+.rrg-chip-k { font-family: var(--mono); font-size: 11.5px; }
+.rrg-chip-l { font-size: 11.5px; color: var(--text-3); }
+.rrg-chip.on .rrg-chip-l { color: var(--text-2); }
+.rrg-chip:hover { border-color: var(--border-strong); }
+.rrg-chip:focus-within { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+/* ---- 提示列 ---- */
+.rrg-notice {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 13px; border-radius: var(--radius-sm);
+  font-size: 12.5px; line-height: 1.5;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+}
+.rrg-notice.info { border-color: #c7d7fd; background: var(--brand-soft); color: #1e3fa8; }
+.rrg-notice.warn { border-color: #f2ddb4; background: var(--warn-soft); color: var(--warn); }
+.rrg-notice.error { border-color: #f6c9c9; background: var(--up-soft); color: #a82020; }
+.rrg-notice-text { min-width: 0; }
+.rrg-notice-retry {
+  flex: none; font: inherit; font-size: 12px; font-weight: 600;
+  padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid currentColor; background: transparent; color: inherit;
+}
+.rrg-notice-retry:hover { background: rgba(255,255,255,.55); }
+
+/* ---- 圖表 ---- */
+.rrg-chart-card .card-head { margin-bottom: 8px; }
+.rrg-legend { display: flex; flex-wrap: wrap; gap: 12px; }
+.rrg-leg {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-2);
+}
+.rrg-leg i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.rrg-leg b { font-family: var(--mono); color: var(--text); }
+
+.rrg-chart-wrap {
+  position: relative; width: 100%;
+  /* RRG 的繪圖區必須是正方形（x/y 等比例，否則 45° 分界線失真）。
+     在寬螢幕上若讓畫布鋪滿 1100px+ 寬，正方形只能由高度決定，
+     左右就會各留下 300px 以上的空白，看起來像壞掉。
+     這裡限制寬度並置中，讓圖實際佔用的面積與外框相符。 */
+  max-width: 760px; margin-inline: auto;
+  min-height: 340px;
+}
+.rrg-chart-wrap canvas { display: block; max-width: 100%; }
+
+.rrg-tip {
+  position: absolute; z-index: 20; pointer-events: none;
+  min-width: 196px; max-width: 268px;
+  /* 手機上圖表本身不高，tooltip 有 10 列資料時可能比可用高度還高。
+     限制高度並允許內部捲動，否則最下面幾列（下一步／資料至）會被切掉。
+     上限取「視口的 46vh」——手機 844px 高時約 388px，扣掉圖表容器
+     在頁面中的偏移後仍留得住整份內容的絕大部分。
+     overflow-y:auto 配上 pointer-events:none 不會影響滑鼠追蹤——
+     tooltip 永遠不接收事件，捲動只在使用者點擊鎖定後才有意義，
+     因此另外在鎖定時開啟 pointer-events。 */
+  max-height: min(46vh, 300px); overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgba(255,255,255,.98); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: var(--shadow-lg);
+  padding: 10px 12px; font-size: 12px;
+}
+/* 點擊鎖定後可捲動查看完整內容 */
+.rrg-tip.locked { pointer-events: auto; }
+.rrg-tip-head {
+  display: flex; align-items: center; gap: 6px;
+  font-weight: 700; font-size: 12.5px; color: var(--text);
+  padding-bottom: 7px; margin-bottom: 7px; border-bottom: 1px solid var(--border);
+}
+.rrg-tip-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.rrg-tip-k { font-family: var(--mono); font-size: 11px; color: var(--text-3); font-weight: 500; }
+.rrg-tip-rows { width: 100%; border-collapse: collapse; }
+.rrg-tip-rows th {
+  text-align: left; font-weight: 500; color: var(--text-3);
+  padding: 2px 8px 2px 0; white-space: nowrap; font-size: 11.5px;
+}
+.rrg-tip-rows td {
+  text-align: right; padding: 2px 0; color: var(--text);
+  font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
+
+.rrg-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px;
+  background: rgba(248,250,252,.72); border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+.rrg-empty-title { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--text-2); }
+.rrg-empty-msg { margin: 0; font-size: 12px; color: var(--text-3); }
+
+.rrg-foot {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-3); line-height: 1.6;
+}
+.rrg-foot-item { min-width: 0; }
+.rrg-foot-item b { color: var(--text-2); }
+
+/* ---- 明細表 ---- */
+.rrg-table-hint { font-size: 11.5px; color: var(--text-3); }
+.rrg-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.rrg-table {
+  width: 100%; border-collapse: collapse; font-size: 12.5px;
+  min-width: 720px;
+}
+.rrg-table thead th {
+  text-align: left; font-weight: 600; font-size: 11.5px; color: var(--text-3);
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  white-space: nowrap; background: var(--surface-2);
+  position: sticky; top: 0;
+}
+.rrg-table thead th.num { text-align: right; }
+.rrg-table tbody td {
+  padding: 8px 10px; border-bottom: 1px solid #f1f4f8;
+  color: var(--text); vertical-align: middle;
+}
+.rrg-table tbody td.num {
+  text-align: right; font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.rrg-table tbody tr { cursor: pointer; transition: background .12s; }
+.rrg-table tbody tr:hover { background: var(--surface-2); }
+.rrg-table tbody tr[data-key]:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.rrg-table-empty { text-align: center; color: var(--text-3); padding: 26px 10px !important; }
+.rrg-td-label { color: var(--text-3); font-size: 11.5px; margin-left: 3px; }
+.rrg-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px; vertical-align: 1px;
+}
+
+.rrg-quad {
+  display: inline-block; font-size: 11.5px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.rrg-quad.q-leading    { color: #0b7a44; background: var(--down-soft); border-color: #b7e5cf; }
+.rrg-quad.q-weakening  { color: var(--warn); background: var(--warn-soft); border-color: #f2ddb4; }
+.rrg-quad.q-lagging    { color: #a82020; background: var(--up-soft); border-color: #f6c9c9; }
+.rrg-quad.q-improving  { color: var(--brand); background: var(--brand-soft); border-color: #c7d7fd; }
+.rrg-quad.q-unknown    { color: var(--text-3); background: var(--surface-2); border-color: var(--border); }
+
+.rrg-sig { font-size: 11.5px; white-space: nowrap; }
+.rrg-sig.moving { color: var(--text-2); }
+.rrg-sig.fast { color: var(--brand); font-weight: 600; }
+.rrg-sig.flat { color: var(--text-3); }
+.rrg-sig.cw { color: #0b7a44; font-weight: 600; }
+.rrg-sig.ccw { color: var(--warn); font-weight: 600; }
+
+.rrg-conf {
+  display: inline-block; font-size: 10.5px; font-weight: 700;
+  padding: 1px 5px; border-radius: 4px; margin-left: 3px;
+}
+.rrg-conf.high { background: var(--down-soft); color: #0b7a44; }
+.rrg-conf.med { background: var(--warn-soft); color: var(--warn); }
+
+/* ---- 資料說明 ---- */
+.rrg-diag {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline;
+  margin-top: 12px; padding: 11px 13px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 11.5px; color: var(--text-3); line-height: 1.6;
+}
+.rrg-diag-title {
+  font-weight: 700; color: var(--text-2); font-size: 11.5px;
+  letter-spacing: .2px;
+}
+.rrg-diag-item { min-width: 0; }
+
+/* ---- 窄螢幕 ---- */
+@media (max-width: 720px) {
+  .rrg-controls { gap: 12px 14px; }
+  .rrg-ctrl { flex: 1 1 calc(50% - 14px); }
+  .rrg-select { width: 100%; min-width: 0; }
+  .rrg-range { width: 100%; }
+  .rrg-chart-wrap { min-height: 300px; }
+  .rrg-tip { max-width: 210px; font-size: 11.5px; }
+  .rrg-table { min-width: 640px; font-size: 12px; }
+  .rrg-table thead th, .rrg-table tbody td { padding: 7px 8px; }
+}
+
+@media print {
+  .rrg-controls, .rrg-sectors, .rrg-notice, .rrg-tip { display: none; }
+  .rrg-table-wrap { overflow: visible; }
+  .rrg-table { min-width: 0; }
+}

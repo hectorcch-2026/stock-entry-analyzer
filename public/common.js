@@ -137,7 +137,7 @@
    *   併進詳情頁會導致換一檔股票就重抓一次 FRED，且兩者的失敗模式
    *   完全不同（K 線逾時 vs SEC 逾時），混在一起會互相牽連。
    */
-  var ROUTES = { predict: 'predict', screen: 'screen', macro: 'macro', detail: 'detail' };
+  var ROUTES = { predict: 'predict', screen: 'screen', macro: 'macro', rrg: 'rrg', detail: 'detail' };
 
   function parseHash() {
     var h = String(location.hash || '').replace(/^#\/?/, '');
@@ -145,6 +145,7 @@
     var parts = h.split('/').filter(Boolean);
     var head = parts[0];
     if (head === 'screen') return { name: 'screen', symbol: null };
+    if (head === 'rrg') return { name: 'rrg', symbol: null };
     if (head === 'macro') {
       return { name: 'macro', symbol: parts[1] ? decodeURIComponent(parts[1]) : null };
     }
@@ -164,7 +165,7 @@
     });
   }
 
-  var handlers = { onPredict: null, onScreen: null, onMacro: null, onDetail: null };
+  var handlers = { onPredict: null, onScreen: null, onMacro: null, onRrg: null, onDetail: null };
 
   /** 由 app.js / screen.js / macro.js 註冊各自的進場處理 */
   SA.onRoute = function (map) {
@@ -182,16 +183,19 @@
     var chart = document.getElementById('viewChart');
     var screen = document.getElementById('viewScreen');
     var macro = document.getElementById('viewMacro');
+    var rrgView = document.getElementById('viewRrg');
     if (chart) chart.hidden = name !== 'chart';
     if (screen) screen.hidden = name !== 'screen';
     if (macro) macro.hidden = name !== 'macro';
+    if (rrgView) rrgView.hidden = name !== 'rrg';
   }
 
   var lastDispatched = '';
 
   function dispatch() {
     var r = parseHash();
-    var view = r.name === 'screen' ? 'screen' : (r.name === 'macro' ? 'macro' : 'chart');
+    var view = r.name === 'screen' ? 'screen'
+      : (r.name === 'macro' ? 'macro' : (r.name === 'rrg' ? 'rrg' : 'chart'));
     showView(view);
     setActiveNav(r.name);
     var sig = r.name + '|' + (r.symbol || '');
@@ -201,6 +205,7 @@
 
     if (r.name === 'screen' && handlers.onScreen) handlers.onScreen();
     else if (r.name === 'macro' && handlers.onMacro) handlers.onMacro(r.symbol);
+    else if (r.name === 'rrg' && handlers.onRrg) handlers.onRrg();
     else if (r.name === 'detail' && handlers.onDetail) handlers.onDetail(r.symbol);
     else if (r.name === 'predict' && handlers.onPredict) handlers.onPredict();
   }
