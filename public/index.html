@@ -793,8 +793,20 @@
       <section class="card" aria-labelledby="interpTitle">
         <header class="card-head">
           <h2 id="interpTitle">AI 解讀</h2>
-          <span class="badge" id="interpMode">—</span>
+          <div class="ic-head-actions">
+            <button type="button" class="btn btn-sm btn-ghost" id="interpLlmBtn"
+                    aria-describedby="interpLlmHint">
+              <span class="spinner" id="interpLlmSpin" aria-hidden="true"></span>
+              <span class="btn-label">AI 潤飾</span>
+            </button>
+            <span class="badge" id="interpMode">—</span>
+          </div>
         </header>
+        <p class="interp-llm-hint" id="interpLlmHint">
+          規則型解讀不需網路、可重現、每次結果相同。
+          按「AI 潤飾」會額外呼叫語言模型改寫語氣（約 10–20 秒），
+          但<strong>所有數字仍由程式計算</strong>，模型不得新增數值。
+        </p>
         <div id="interpOverall" class="interp-overall" hidden></div>
         <div id="interpList" class="interp-list">
           <p class="mt-empty">載入中…</p>

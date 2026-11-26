@@ -2,10 +2,10 @@
 
 | 項目 | 內容 |
 |---|---|
-| 文件版本 | v1.0 |
+| 文件版本 | v1.1（新增 LLM 實接與推理型模型調參，見 3.4.1） |
 | 產出日期 | 2026-11-26 |
 | 對應實作 | `lib/fred.js`、`lib/sec.js`、`lib/fomc.js`、`lib/macro.js`、`lib/interpret.js`、`server.js`、`public/macro.js` |
-| 驗證狀態 | 單元測試 90/90、E2E 82/82、既有回歸 118/118 全通過 |
+| 驗證狀態 | 單元測試 94/94、E2E 82/82、既有回歸 118/118 全通過 |
 | 文件性格 | **所有範例值都取自實際 API 回應**，非示意數字。文末附完整可複製的驗證指令 |
 
 ---
@@ -557,22 +557,58 @@
 
 **`mode=llm` 的行為**
 
+未設金鑰時（優雅降級）：
+
 ```json
 { "llm": { "text": null, "mode": "rule", "note": "未設定 LLM API Key，使用規則型解讀" } }
 ```
 
-**這是刻意的優雅降級**：即使明確要求 `mode=llm` 而環境沒有 Key，端點仍回 **HTTP 200**，`interpretation` 完整，只是 `llm.text` 為 `null` 並附說明。使用者不會因為一個可選功能而拿不到主要結果。
+設了金鑰且成功時：
+
+```json
+{ "llm": { "text": "核心CPI年增率2.57%，接近2%目標……", "mode": "llm", "note": null } }
+```
+
+**未設金鑰時也是 HTTP 200**：`interpretation` 完整，只是 `llm.text` 為 `null` 並附說明。使用者不會因為一個可選功能而拿不到主要結果。
+
+**設定方式**（優先序：環境變數 → `config.json` 的 `llm` 區塊）
+
+| config.json `llm` | 環境變數 | 說明 |
+|---|---|---|
+| `apiKey` | `LLM_API_KEY` / `OPENAI_API_KEY` | 金鑰 |
+| `baseUrl` | `LLM_BASE_URL` / `OPENAI_BASE_URL` | API base，含 `/v1` |
+| `model` | `LLM_MODEL` / `OPENAI_MODEL` | 模型名 |
+| `maxTokens` | `LLM_MAX_TOKENS` | 輸出上限，預設 3000 |
+| `timeoutMs` | `LLM_TIMEOUT_MS` | 逾時毫秒，預設 60000 |
+| `disableThinking` | `LLM_DISABLE_THINKING=1` | 關閉推理型模型的思考過程 |
+
+`config.json` 已列入 `.gitignore`，金鑰不會進版控。`config.example.json` 有完整範例（不含真實金鑰）。
 
 LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 
 | 措施 | 實作 |
 |---|---|
 | 不給模型新數字 | prompt 明令「**絕對不可新增或推測任何數值**」，只提供已算好的 `headline`/`detail` |
-| 幻覺硬過濾 | 回應中若有 **> 3 個** `\d+\.\d+` 數字在輸入中找不到對應 → **整段棄用**，退回規則結果 |
+| 幻覺硬過濾 | 回應中若有 **> 3 個** `\d+\.\d+` 數字在**來源文字**中找不到對應 → **整段棄用**，退回規則結果 |
+| 白名單範圍 | = 證據數值 ∪ 證據百分位 ∪ `headline`/`detail`/`caveat` ∪ **送出的 prompt 全文** |
+| 只取 `content` | 推理型模型的 `reasoning_content` 是思考草稿，**絕不當成結果輸出** |
 | 不可預測 | prompt 明令不可給投資建議、不可預測價格或走勢 |
 | 不可粉飾矛盾 | prompt 明令若結論互相矛盾必須說出，不可粉飾 |
-| 逾時保護 | `AbortSignal.timeout(20000)` |
-| 參數 | `temperature: 0.3`、`max_tokens: 700`、模型預設 `gpt-4o-mini`（可用 `OPENAI_MODEL` 覆寫） |
+| 逾時保護 | `AbortSignal.timeout(60000)` |
+| 參數 | `temperature: 0.3`、`max_tokens: 3000`、預設模型 `gpt-4o-mini` |
+
+### 3.4.1 推理型模型的三個實測陷阱（DeepSeek-V4.1-flash）
+
+實接 `DeepSeek-V4.1-flash`（`https://www.moyu.cn/v1`）時遇到三個會讓功能**靜默失效**的問題，全部已修正並由 J7–J10 測試鎖住：
+
+| # | 現象 | 根因 | 修正 |
+|---|---|---|---|
+| 1 | `llm.text` 永遠是 `null`，退回規則層 | 該模型先產生 `reasoning_content`，且 **reasoning_tokens 計入 `max_tokens`**。實測 `max_tokens=700` 時 700 全被推理吃光，`finish_reason='length'`、`content` 為**空字串** | 預設提高到 3000；並且**分辨原因**——`finish_reason='length'` 時明確回報「token 預算被推理用盡（推理 N tokens）」，而不是含糊的「回應為空」 |
+| 2 | 一份完全正確的輸出被整段丟棄 | 模型會引用 `detail` 裡的「歷史 18.3 百分位」「99.2 百分位」，但舊白名單只收 `evidence[].value`，於是這些**正確引用被誤判成幻覺** | 白名單擴大到 prompt 全文與所有來源文字 |
+| 3 | 延遲 12–29 秒，且長度不穩 | 同一份輸入的推理量在 **1340–6167 tokens** 之間劇烈波動 | 送 `enable_thinking: false` 關閉推理（實測降到約 **2 秒**、0 推理 token）。此任務只是改寫語氣，不需要推理；供應商不支援時會忽略，無副作用 |
+
+> **為什麼預設關閉推理而不是加大預算**：光是加大 `max_tokens` 只能讓它「剛好不失敗」，推理量波動會讓延遲與成本不可預測（實測最慢 29 秒）。改寫語氣這個任務本身不需要推理，關掉才是對症下藥。若確實想要推理品質，把 `disableThinking` 設為 `false` 並將 `maxTokens` 提到 8000。
+
 
 **錯誤處理**
 
@@ -616,7 +652,7 @@ LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 
 | 路由 | 頁面 | 呼叫的端點 |
 |---|---|---|
-| `#/macro` | 宏觀儀表板 | `/api/macro`、`/api/data-dict`、`/api/interpret?scope=macro` |
+| `#/macro` | 宏觀儀表板 | `/api/macro`、`/api/data-dict`、`/api/interpret?scope=macro`（按「AI 潤飾」時加 `&mode=llm`） |
 | `#/macro/AAPL` | 個股財報 + 宏觀背景 | `/api/macro/AAPL`、`/api/interpret?scope=fundamentals&symbol=AAPL` |
 
 導覽列共 4 項：`#/predict`（K 線預測）、`#/screen`（AI 選股）、`#/macro`（宏觀與基本面）、個股詳情（隱藏路由）。
@@ -627,7 +663,10 @@ LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 |---|---|---|
 | **宏觀數據** | 18 列指標表（值／單位／資料時點／歷史百分位／來源徽章）＋ FOMC 下一場會議卡片與日程清單 ＋ 限制說明卡 | 數據列表 |
 | **資料字典** | 26 列欄位表（定義／來源／值域／範例值）＋ 關鍵字過濾 | **欄位定義、來源、值域、範例值** |
-| **AI 解讀** | 總體立場摘要 ＋ 各主題判讀卡（標題／說明／依據／注意事項）＋ 資料缺口 ＋ 免責聲明 | **AI 解讀結果** |
+| **AI 解讀** | 總體立場摘要 ＋ 各主題判讀卡（標題／說明／依據／注意事項）＋ 資料缺口 ＋ 免責聲明 ＋ **「AI 潤飾」按鈕** | **AI 解讀結果** |
+
+**為什麼「AI 潤飾」是按鈕而不是自動執行**：頁面載入時只打規則型（不需網路、可重現、數十毫秒）。模型潤飾要 2–20 秒、會消耗使用者的 API 額度，而規則型結果本身已完整可用——所以做成使用者主動觸發。按鈕旁固定顯示一段說明，講清楚「數字由程式計算、模型只改寫語氣」，避免使用者誤以為摘要是模型算的。
+
 
 ### 4.3 幾個易用性決定
 
@@ -677,9 +716,10 @@ LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 
 ### 5.3 環境限制
 
-- **本環境未設定 `OPENAI_API_KEY`**，因此 `mode=llm` 一律回 `llm: null` 並說明。這是預期行為，不是故障。規則型解讀完整可用。
+- **LLM 為選用功能**。未設定金鑰時 `mode=llm` 一律回 `llm: {text:null, mode:'rule'}` 並附說明，這是預期行為不是故障，規則型解讀完整可用。已設定金鑰時，前端可按「AI 潤飾」取得模型改寫的摘要，約 2 秒（關閉推理）。
 - 日頻序列在週末與假日無新值，不同序列的最新日期本來就會不一致（API 已在每列標明 `asOf`）。
 - 部分月份資料可能因政府停擺等原因缺漏，年增率計算會因此缺基期（畫面會標示）。
+- 模型潤飾的**品質與延遲取決於供應商**。本專案已針對推理型模型做過實測與調參（見 3.4.1），但換模型或供應商時建議重跑 `mode=llm` 驗證一次。
 
 ---
 
@@ -689,7 +729,7 @@ LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 
 | 測試 | 規模 | 內容 |
 |---|---|---|
-| `npm run test:macro` | **90 / 90** | 離線單元測試：CSV 解析、ZIP 偵測、YoY 對齊、百分位、SEC 期間分類、概念優先序、TTM 三路線、FOMC 解析、解讀引擎、LLM 幻覺防護、資料字典完整性、前端契約 |
+| `npm run test:macro` | **94 / 94** | 離線單元測試：CSV 解析、ZIP 偵測、YoY 對齊、百分位、SEC 期間分類、概念優先序、TTM 三路線、FOMC 解析、解讀引擎、LLM 幻覺防護與推理模型調參、資料字典完整性、前端契約 |
 | `npm run test:e2e-macro` | **82 / 82** | 真實瀏覽器：1440 桌面／390 手機、三分頁、18 列、26 列、5 張判讀卡、港股降級、無溢出、雙重縮放守門、導覽回歸 |
 | `npm run test:all` | 含既有回歸 | 把宏觀單元測試插進既有全量測試鏈，確保新模組沒破壞原有功能 |
 | 一次性事實校驗 | **118 / 118** | 開發期用的一次性腳本，逐條比對「文件寫的」與「程式實際做的」是否一致。**未納入版控**（位於 gitignore 的 `.p/`），僅供本次交付的自我檢查紀錄 |
@@ -701,6 +741,10 @@ LLM 的防護措施（`lib/interpret.js` `polishWithLlm`）：
 - `G6` MSFT 走路線 3 → 346.45B。
 - `I12 全部指標不可用 → unknown 不可說中性`：鎖住 5.2 的第三個坑。
 - `J3 含大量來源沒有的數字 → 整段棄用`：鎖住幻覺過濾。
+- `J7 推理模型吃光 token → 說明是預算不足`：鎖住 3.4.1 的第 1 個陷阱，避免又變成含糊的「回應為空」。
+- `J8 reasoning_content 不得被當成結果輸出`：鎖住思考草稿不外流。
+- `J9 模型引用 detail 裡的百分位數 → 不可誤判為幻覺`：鎖住 3.4.1 的第 2 個陷阱（白名單範圍）。
+- `J10 關閉推理時要送出 enable_thinking:false`：鎖住 3.4.1 的第 3 個陷阱，同時確認未啟用時不多送非標準參數。
 - `L8 單位已帶量級時不得再縮寫`：鎖住 5.2 的第一個坑。
 - `L9 面向前端的文字不得含 Markdown 標記`：因為前端用 `textContent`，`**粗體**` 會原樣顯示星號。
 
@@ -734,6 +778,18 @@ console.log(j.interpretation.mode, j.interpretation.overall);
 
 # 5. 錯誤處理：應回 BAD_SCOPE / 400
 curl -s -w '\n%{http_code}\n' 'localhost:5177/api/interpret?scope=bad'
+
+# 6. LLM 潤飾：應回 llm.mode='llm' 且 text 非 null（未設金鑰時會是 'rule' + 說明）
+curl -s 'localhost:5177/api/interpret?scope=macro&mode=llm' | node -e "
+const j=JSON.parse(require('fs').readFileSync(0,'utf8'));
+console.log('mode:', j.llm && j.llm.mode);
+console.log('note:', j.llm && j.llm.note);
+console.log('text:', j.llm && j.llm.text);
+"
+
+# 7. 確認金鑰沒有進版控（應印出 config.json 與 .gitignore 的規則）
+git check-ignore -v config.json
+git grep -l "$(node -p "require('./config.json').llm.apiKey")" || echo '金鑰不在任何受版控檔案中'
 ```
 
 ### 6.3 本次實測基準值（2026-11-26）
@@ -761,5 +817,5 @@ curl -s -w '\n%{http_code}\n' 'localhost:5177/api/interpret?scope=bad'
 | `server.js` | 4 個端點的路由與信封 | 679–773 |
 | `public/macro.js` | 頁面控制器、渲染、格式化 | 789 |
 | `public/styles.css` | 宏觀模組樣式 | 新增 ~540 |
-| `tests/macro-unit.cjs` | 離線單元測試 | 1202（90 測試） |
+| `tests/macro-unit.cjs` | 離線單元測試 | 1326（94 測試） |
 | `tests/e2e-macro.mjs` | 瀏覽器 E2E | 490（82 檢查） |

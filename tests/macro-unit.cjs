@@ -847,16 +847,32 @@ async function withStubFetch(stub, fn) {
 }
 
 async function runLlmTests() {
+  // 整個 J 系列都要「不讀本機 config.json」，否則本機填了金鑰／開了 disableThinking
+  // 就會讓測試結果隨機器而異（假失敗或假通過）。
+  const origCfgPath = process.env.LLM_CONFIG_PATH;
+  process.env.LLM_CONFIG_PATH = '';
+  try {
+    await runLlmTestsInner();
+  } finally {
+    if (origCfgPath != null) process.env.LLM_CONFIG_PATH = origCfgPath;
+    else delete process.env.LLM_CONFIG_PATH;
+  }
+}
+
+async function runLlmTestsInner() {
   await ta('J1 無 API Key → 靜默退回規則層，不報錯', async () => {
-    const orig = process.env.OPENAI_API_KEY;
+    const origKey = process.env.OPENAI_API_KEY;
+    const origLlmKey = process.env.LLM_API_KEY;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.LLM_API_KEY;
     try {
       const r = await interpret.polishWithLlm(fakeInterp(), {});
       assert.strictEqual(r.text, null);
       assert.strictEqual(r.mode, 'rule');
       assert.ok(r.note.includes('未設定'));
     } finally {
-      if (orig != null) process.env.OPENAI_API_KEY = orig;
+      if (origKey != null) process.env.OPENAI_API_KEY = origKey;
+      if (origLlmKey != null) process.env.LLM_API_KEY = origLlmKey;
     }
   });
 
@@ -913,6 +929,114 @@ async function runLlmTests() {
     );
     assert.strictEqual(r.mode, 'rule');
     assert.ok(r.note.includes('空'));
+  });
+
+  /* ---- 以下四條對應實測 DeepSeek-V4.1-flash 時踩到的坑 ---- */
+
+  await t2('J7 推理模型吃光 token（finish_reason=length）→ 說明是預算不足，不可只說「空回應」', async () => {
+    const r = await withStubFetch(
+      async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            finish_reason: 'length',
+            message: { content: '', reasoning_content: '先想想…' },
+          }],
+          usage: { completion_tokens_details: { reasoning_tokens: 3000 } },
+        }),
+      }),
+      () => interpret.polishWithLlm(fakeInterp(), { apiKey: 'test-key' })
+    );
+    assert.strictEqual(r.mode, 'rule');
+    assert.ok(/預算|推理/.test(r.note), `應指出推理吃光預算，實際：${r.note}`);
+    assert.ok(r.note.includes('3000'), `應帶出實際 token 數，實際：${r.note}`);
+  });
+
+  await t2('J8 reasoning_content 不得被當成結果輸出（模型的思考草稿含未查核數字）', async () => {
+    const r = await withStubFetch(
+      async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            finish_reason: 'stop',
+            message: {
+              content: '政策利率為 3.75% 至 4.00%。',
+              reasoning_content: '草稿：也許利率是 9.99%，通膨 8.88%…',
+            },
+          }],
+        }),
+      }),
+      () => interpret.polishWithLlm(fakeInterp(), { apiKey: 'test-key' })
+    );
+    assert.strictEqual(r.mode, 'llm');
+    assert.ok(!r.text.includes('9.99'), 'reasoning_content 的數字絕不可外流');
+    assert.ok(!r.text.includes('8.88'), 'reasoning_content 的數字絕不可外流');
+    assert.ok(r.text.includes('3.75'));
+  });
+
+  await t2('J9 模型引用 detail 裡的百分位數 → 不可誤判為幻覺（白名單須含 prompt 全文）', async () => {
+    const interp = {
+      findings: [
+        {
+          headline: '失業率 4.1%（歷史 18.3 百分位）',
+          detail: '失業率為 4.1%，位於歷史 18.3 百分位，屬相對低檔。',
+          stance: 'neutral',
+          evidence: [{ label: '失業率', value: 4.1, unit: '%', percentile: 18.3 }],
+        },
+        {
+          headline: '工業生產 102.24（99.2 百分位）',
+          detail: '工業生產 102.24，位於 99.2 百分位。',
+          stance: 'mixed',
+          evidence: [{ label: '工業生產', value: 102.24, unit: 'index', percentile: 99.2 }],
+        },
+      ],
+    };
+    // 模型輸出大量引用這些百分位數——它們都在 prompt 裡，屬合法引用
+    const r = await withStubFetch(
+      async () => ({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            finish_reason: 'stop',
+            message: {
+              content: '失業率 4.1%，處於歷史 18.3 百分位；工業生產 102.24，位於 99.2 百分位，兩者指向不同方向。',
+            },
+          }],
+        }),
+      }),
+      () => interpret.polishWithLlm(interp, { apiKey: 'test-key' })
+    );
+    assert.strictEqual(r.mode, 'llm', `合法引用不該被丟棄，實際 note：${r.note}`);
+    assert.ok(r.text.includes('18.3'));
+  });
+
+  await t2('J10 關閉推理時要送出 enable_thinking:false', async () => {
+    let sent = null;
+    await withStubFetch(
+      async (url, opt) => {
+        sent = JSON.parse(opt.body);
+        return {
+          ok: true,
+          json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: '利率 3.75%–4.00%。' } }] }),
+        };
+      },
+      () => interpret.polishWithLlm(fakeInterp(), { apiKey: 'test-key', disableThinking: true })
+    );
+    assert.strictEqual(sent.enable_thinking, false, '應送出 enable_thinking:false');
+
+    // 未指定時不得多送非標準參數，避免打擾不支援的供應商
+    let sent2 = null;
+    await withStubFetch(
+      async (url, opt) => {
+        sent2 = JSON.parse(opt.body);
+        return {
+          ok: true,
+          json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: '利率 3.75%–4.00%。' } }] }),
+        };
+      },
+      () => interpret.polishWithLlm(fakeInterp(), { apiKey: 'test-key' })
+    );
+    assert.ok(!('enable_thinking' in sent2), '未啟用時不該送出 enable_thinking');
   });
 }
 

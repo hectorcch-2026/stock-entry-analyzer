@@ -1,7 +1,18 @@
 {
-  "_comment": "複製此檔為 config.json 並填入實際值即可啟用 Telegram 通知。未填寫時系統以模擬模式運作。",
+  "_comment": "複製此檔為 config.json 並填入實際值。config.json 已列入 .gitignore，不會進版控。留空時對應功能以模擬／規則模式運作。",
   "telegram": {
     "botToken": "",
     "chatId": ""
+  },
+  "llm": {
+    "_comment": "選用。未填 apiKey 時，AI 解讀一律走規則型（不需網路、可重現）。填了之後，前端可按「AI 潤飾」額外呼叫模型改寫語氣，但所有數字仍由程式計算。",
+    "apiKey": "",
+    "baseUrl": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini",
+    "_maxTokens_note": "推理型模型（如 DeepSeek-V4.1-flash）會先產生 reasoning_content，且其 token 計入 max_tokens。實測推理量在 1340–6167 之間波動，會把正文擠成空字串，故建議搭配 disableThinking 或調高至 8000。",
+    "maxTokens": 3000,
+    "timeoutMs": 60000,
+    "_disableThinking_note": "選用。true 時送出 enable_thinking:false，關閉推理型模型的思考過程。此任務只是改寫語氣，不需要推理。實測可從 12–29 秒降到約 2 秒。供應商不支援時會忽略此參數。",
+    "disableThinking": true
   }
 }

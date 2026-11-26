@@ -689,9 +689,60 @@
     }
   }
 
+  /* ---------------- AI 潤飾（選用） ----------------
+   *
+   * 預設走規則型：不需網路、可重現、每次結果相同。
+   * 使用者按下「AI 潤飾」才額外呼叫 LLM 改寫語氣。
+   *
+   * 為什麼是「按鈕」而不是自動執行：
+   *   - 一次要 10–20 秒（推理型模型會先想 1900+ token）
+   *   - 會消耗使用者的 API 額度
+   *   - 規則型結果本身已完整可用，LLM 只是換句話說
+   *
+   * 失敗一律退回規則層並說明原因，不讓使用者停在空白畫面。
+   */
+  function requestLlmPolish() {
+    var btn = $('interpLlmBtn');
+    var spin = $('interpLlmSpin');
+    var label = btn && btn.querySelector('.btn-label');
+    if (!btn || btn.disabled) return Promise.resolve();
+
+    btn.disabled = true;
+    if (spin) spin.hidden = false;
+    if (label) label.textContent = '潤飾中…';
+
+    var qs = state.scope === 'symbol' && state.symbol
+      ? '/api/interpret?scope=fundamentals&mode=llm&symbol=' + encodeURIComponent(state.symbol)
+      : '/api/interpret?scope=macro&mode=llm';
+
+    return SA.api(qs)
+      .then(function (d) {
+        if (d && d.interpretation) {
+          renderInterp(d.interpretation, d.llm || null);
+        }
+      })
+      .catch(function (err) {
+        var info = SA.describeError(err);
+        // 仍要保留規則結果，只補一行說明
+        var note = document.querySelector('.interp-llm-note');
+        if (note) note.textContent = 'AI 潤飾失敗：' + info.message + '（以下仍為規則型解讀）';
+      })
+      .then(function () {
+        btn.disabled = false;
+        if (spin) spin.hidden = true;
+        if (label) label.textContent = 'AI 潤飾';
+      });
+  }
+
   /* ---------------- 事件綁定 ---------------- */
 
   function bindEvents() {
+    var llmBtn = $('interpLlmBtn');
+    if (llmBtn && !llmBtn.__bound) {
+      llmBtn.__bound = true;
+      llmBtn.addEventListener('click', requestLlmPolish);
+    }
+
     var refresh = $('macroRefresh');
     if (refresh) {
       refresh.addEventListener('click', function () {
