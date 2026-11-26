@@ -38,6 +38,7 @@ const pool = require('./lib/pool');
 const credibility = require('./lib/credibility');
 const macro = require('./lib/macro');
 const interpret = require('./lib/interpret');
+const econSync = require('./lib/econ-sync');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -723,6 +724,141 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/data-dict' && req.method === 'GET') {
       const out = await macro.getDataDictionary();
       return sendJSON(res, 200, out);
+    }
+
+    /*
+     * 經濟資料庫（econ-store）端點
+     * ==============================
+     *
+     * GET  /api/econ/status            資料庫概況（各表筆數、檔案大小）
+     * GET  /api/econ/series            指標主檔清單
+     * GET  /api/econ/query             查觀測值
+     *        ?series=cpiYoy&from=2026-01&to=2026-10&order=desc&limit=12
+     * POST /api/econ/sync              從上游同步（預設只補過期的）
+     *        body: { keys?: string[], force?: boolean }
+     * POST /api/econ/observations      寫入觀測值（upsert）
+     *        body: { rows: [{ seriesKey, period, value, ... }] }
+     * PATCH /api/econ/observations     更新既有紀錄（找不到回 404，不新增）
+     *        body: { seriesKey, period, value }
+     *
+     * 為什麼查詢走 GET、寫入走 POST/PATCH：
+     *   語義要跟 HTTP 方法一致，否則快取與重試語義會錯亂
+     *   （重試一個 GET 永遠安全，重試一個 POST 可能重複寫入——
+     *    這也是 upsert 必須冪等的原因）。
+     */
+    if (pathname === '/api/econ/status' && req.method === 'GET') {
+      const store = econSync.getStore();
+      return sendJSON(res, 200, {
+        ok: true,
+        storage: store.memoryOnly ? 'memory' : 'file',
+        file: store.filePath,
+        schemaVersion: require('./lib/econ-store').SCHEMA_VERSION,
+        ...store.stats(),
+      });
+    }
+
+    if (pathname === '/api/econ/series' && req.method === 'GET') {
+      const store = econSync.getStore();
+      return sendJSON(res, 200, { ok: true, series: store.listSeries() });
+    }
+
+    if (pathname === '/api/econ/query' && req.method === 'GET') {
+      const store = econSync.getStore();
+      const seriesKey = q.series || q.seriesKey || null;
+      if (seriesKey && !store.getSeries(seriesKey)) {
+        // 明確區分「沒這個指標」與「有指標但沒資料」，否則使用者無從判斷
+        return sendError(res, 404, 'UNKNOWN_SERIES', `資料庫沒有指標 ${seriesKey}`,
+          '先呼叫 POST /api/econ/sync 建立指標主檔');
+      }
+      const limit = q.limit != null ? Number(q.limit) : undefined;
+      if (q.limit != null && (!Number.isFinite(limit) || limit <= 0)) {
+        return sendError(res, 400, 'BAD_LIMIT', 'limit 必須是正整數');
+      }
+      const rows = store.query({
+        seriesKey,
+        from: q.from,
+        to: q.to,
+        order: q.order === 'desc' ? 'desc' : 'asc',
+        limit,
+      });
+      return sendJSON(res, 200, {
+        ok: true,
+        series: seriesKey,
+        count: rows.length,
+        rows,
+      });
+    }
+
+    if (pathname === '/api/econ/sync' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const keys = Array.isArray(body.keys) ? body.keys : null;
+      const store = econSync.getStore();
+
+      // 先無條件補主檔（純本地操作，不打上游）。
+      // 實測踩過：手動 POST 進來的序列會被自動補成 { label: 'cpiYoy' }，
+      // 若只在需要重抓時才寫主檔，這些序列永遠停在「label 等於 key」的狀態。
+      // 補主檔很便宜（一個 Map 賦值），每次 sync 都做，讓它自我修復。
+      const allKeys = keys || require('./lib/fred').SERIES.map((s) => s.key);
+      let metaFilled = 0;
+      for (const k of allKeys) {
+        const def = require('./lib/fred').BY_KEY.get(k);
+        if (def) {
+          const r = store.writeSeries(econSync.seriesMetaFromFred(def));
+          if (r.action !== 'unchanged') metaFilled += 1;
+        }
+      }
+
+      // 未指定 force 時，先篩掉還新鮮的序列，避免無謂打上游
+      let targets = keys;
+      let skippedFresh = [];
+      if (!body.force) {
+        targets = [];
+        for (const k of allKeys) {
+          const need = econSync.needsRefresh(k, { store });
+          if (need.needed) targets.push(k); else skippedFresh.push({ key: k, reason: need.reason });
+        }
+        if (!targets.length) {
+          return sendJSON(res, 200, {
+            ok: true,
+            synced: false,
+            message: '所有序列的本地資料都還新鮮，未向上游發出任何請求',
+            metaFilled,
+            skippedFresh,
+            stats: store.stats(),
+          });
+        }
+      }
+
+      const out = await econSync.syncAll(targets, { force: !!body.force });
+      return sendJSON(res, 200, { ...out, metaFilled, skippedFresh });
+    }
+
+    if (pathname === '/api/econ/observations' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const rows = Array.isArray(body.rows) ? body.rows : (body.seriesKey ? [body] : null);
+      if (!rows || !rows.length) {
+        return sendError(res, 400, 'EMPTY', '請提供 rows 陣列，或單筆 { seriesKey, period, value }');
+      }
+      const store = econSync.getStore();
+      const report = store.writeMany(rows);
+      // 全部被拒才算失敗；部分成功仍回 200 並在 errors 說明
+      const status = report.inserted + report.updated + report.unchanged > 0 ? 200 : 422;
+      return sendJSON(res, status, { ok: status === 200, ...report });
+    }
+
+    if (pathname === '/api/econ/observations' && req.method === 'PATCH') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      if (!body.seriesKey || body.period == null) {
+        return sendError(res, 400, 'EMPTY', '請提供 seriesKey 與 period 以定位既有紀錄');
+      }
+      const store = econSync.getStore();
+      const out = store.update(body.seriesKey, body.period, body);
+      if (!out.ok) {
+        const status = out.code === 'NOT_FOUND' ? 404 : 400;
+        return sendError(res, status, out.code, out.message,
+          out.code === 'NOT_FOUND' ? '更新不會自動新增；若這是新資料請用 POST' : null);
+      }
+      return sendJSON(res, 200, { ok: true, ...out });
     }
 
     /*
