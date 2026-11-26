@@ -1412,3 +1412,623 @@ select.sf-input { cursor: pointer; }
   .main-nav, .chart-tools, .chart-help, .detail-bar, .screen-form-card { display: none; }
   .card { box-shadow: none; break-inside: avoid; }
 }
+
+/* ===================================================
+   宏觀與基本面頁（#/macro、#/macro/:symbol）
+   ===================================================
+   色彩決策（沿用本專案既有規約，勿隨意更動）：
+     - 紅(#d92b2b)／綠(#0f9d58) 已綁定「漲跌」，只用在財報的
+       正向／負向語義，不得拿來表示「偏緊／偏鬆」。
+     - 品牌藍(#1d4ed8) 已綁定「建議買入區間」，因此歷史百分位
+       長條刻意不用藍色，改用琥珀（極高）與石板灰（其餘）表達
+       「位置」而非「好壞」。
+     - 偏緊＝琥珀、偏鬆＝青藍、矛盾＝紫、中性＝石板灰：
+       四種傾向在視覺上等權，不暗示哪一邊才正確。
+
+   版面決策：
+     - 兩張表都是 6 欄，390px 手機必然放不下 → 一律用 .mt-wrap
+       做水平捲動，而不是把欄位擠成兩行（擠壓後數字對不齊）。
+     - .mt-wrap 的父層 .card 已設 min-width:0（見上方註解），
+       否則 grid/flex 子項的 min-width:auto 會撐破容器，
+       導致整頁水平滾動而不是表格內部滾動。
+   =================================================== */
+
+/* ---------------- 通用小按鈕（本頁新增，沿用既有配色） ---------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: inherit; font-weight: 600; cursor: pointer;
+  border-radius: var(--radius-sm); white-space: nowrap;
+  transition: background .14s, border-color .14s, color .14s, box-shadow .14s;
+}
+.btn-sm { padding: 7px 14px; font-size: 13px; }
+.btn-primary {
+  color: #fff; border: 1px solid transparent;
+  background: linear-gradient(180deg, #2b5ce6, #1d4ed8);
+  box-shadow: 0 1px 4px rgba(29, 78, 216, .26);
+}
+.btn-primary:hover:not(:disabled) { box-shadow: 0 3px 10px rgba(29, 78, 216, .32); }
+.btn-ghost {
+  color: var(--text-2); background: #fff; border: 1px solid var(--border-strong);
+}
+.btn-ghost:hover:not(:disabled) { border-color: #229ed9; color: #1a7fb0; background: #f2fbff; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+/* 按鈕文字（載入中會由 JS 改字）：避免文字與 spinner 擠在一起時換行 */
+.btn-label { white-space: nowrap; }
+
+/* 淺底按鈕上的 spinner 必須換色，否則白圈白底看不見 */
+#macroRefresh .spinner {
+  border-color: rgba(29, 78, 216, .22); border-top-color: var(--brand);
+}
+
+.ta-r { text-align: right; }
+.text-warn { color: var(--warn); font-weight: 600; }
+.badge-ok { background: var(--down-soft); color: #0b7a44; border-color: #b7e5cf; }
+
+/* ---------------- 標題列 ---------------- */
+.macro-head-card { padding-bottom: 14px; }
+.mh-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap;
+}
+.mh-title { min-width: 0; flex: 1 1 260px; }
+.mh-title h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: .2px; }
+.mh-sub {
+  margin: 0; font-size: 12.5px; color: var(--text-3); line-height: 1.55;
+}
+.mh-actions {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  flex: none;
+}
+.mh-stamp {
+  font-size: 11.5px; color: var(--text-3); font-family: var(--mono);
+  letter-spacing: .2px;
+}
+
+/* 個股查詢 */
+.mh-search {
+  margin-top: 14px; padding-top: 13px;
+  border-top: 1px dashed var(--border);
+}
+.mh-search-label {
+  display: block; font-size: 12px; font-weight: 600;
+  color: var(--text-2); margin-bottom: 7px;
+}
+.mh-search-box { display: flex; gap: 8px; align-items: stretch; }
+.mh-input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 8px 12px; font-size: 14px; font-family: inherit;
+  color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  transition: border-color .14s, box-shadow .14s, background .14s;
+}
+.mh-input::placeholder { color: var(--text-3); }
+.mh-input:focus {
+  outline: none; background: #fff; border-color: #7ea6f8;
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, .12);
+}
+
+/* 分頁切換 */
+.mh-tabs {
+  display: flex; gap: 4px; margin-top: 14px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 3px; border-radius: 999px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.mh-tabs::-webkit-scrollbar { display: none; }
+.mh-tab {
+  flex: 1 1 auto; white-space: nowrap;
+  padding: 7px 14px; border: none; border-radius: 999px;
+  font-size: 13px; font-weight: 600; font-family: inherit;
+  color: var(--text-2); background: transparent; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.mh-tab:hover { background: #eef1f6; color: var(--text); }
+.mh-tab.active {
+  background: var(--surface); color: var(--brand);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .10);
+}
+
+/* ---------------- 狀態提示條（四種狀態分開配色） ---------------- */
+.macro-notice {
+  margin-top: 14px; padding: 11px 14px;
+  border: 1px solid var(--border); border-left: 3px solid var(--text-3);
+  border-radius: var(--radius-sm);
+  font-size: 13px; line-height: 1.6;
+  display: flex; align-items: flex-start; gap: 9px; flex-wrap: wrap;
+  background: var(--surface-2); color: var(--text-2);
+}
+.macro-notice strong { color: var(--text); }
+.mn-loading { background: #eef6ff; border-color: #cfe3fa; border-left-color: #1d4ed8; color: #0c447c; }
+.mn-loading strong { color: #0c447c; }
+.mn-error { background: #fdeaea; border-color: #f6c9c9; border-left-color: var(--up); color: #8a1f1f; }
+.mn-error strong { color: #7a1717; }
+.mn-warn { background: var(--warn-soft); border-color: #f2ddb4; border-left-color: var(--warn); color: #7c4a03; }
+.mn-warn strong { color: #6b3f02; }
+.mn-degraded { background: var(--warn-soft); border-color: #f2ddb4; border-left-color: var(--warn); color: #7c4a03; }
+.mn-info { background: var(--surface-2); border-left-color: var(--brand); color: var(--text-2); }
+.mn-hint { font-size: 12px; color: inherit; opacity: .82; }
+/* 提示條內的轉圈：淺底專用配色 */
+.mn-spin {
+  flex: none; width: 14px; height: 14px; margin-top: 2px;
+  border: 2px solid rgba(29, 78, 216, .22); border-top-color: var(--brand);
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+
+/* ---------------- 表格 ---------------- */
+.macro-panel { display: block; }
+.mt-wrap {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  /* 讓表格在窄螢幕維持可讀欄寬，改由這裡產生橫向捲動 */
+  margin: 0 -4px; padding: 0 4px;
+}
+.macro-table {
+  width: 100%; border-collapse: collapse;
+  /* 620 → 680：固定欄位合計 544px（見下方 col 寬度），
+     min-width 若只給 620，「指標」欄只剩 76px，長指標名會擠成一行一字。
+     680 讓指標欄至少保有 136px。 */
+  min-width: 680px;
+  font-size: 13px;
+  /* 固定佈局：欄寬由下面的 col 決定，不讓「千人」「十億美元（2017 年連鎖）」
+     這種長單位把「單位」欄撐成半個表格。內容過長時換行，不是撐寬。
+     注意：table-layout:fixed 下，若各 col 寬度總和 ≥ 表格寬度，
+     `width:auto` 的欄會被壓成 0 並裁掉內容 —— 因此每組寬度都必須
+     留足夠空間給 name 欄，這也是下面每個 media query 都要重算 col 的原因。 */
+  table-layout: fixed;
+}
+/* 六欄比例：名稱吃剩餘空間，其餘給剛好夠用的寬度（合計 544px） */
+.macro-table col.c-name { width: auto; }
+.macro-table col.c-val { width: 118px; }
+.macro-table col.c-unit { width: 104px; }
+.macro-table col.c-date { width: 112px; }
+.macro-table col.c-pct { width: 122px; }
+.macro-table col.c-src { width: 88px; }
+/* 字典六欄：定義欄最寬（它資訊量最大），其餘給剛好夠用。
+   固定欄位合計 = 190+104+118+128+118 = 658px，因此 min-width 必須 > 658 + 定義欄最小寬度。
+   下面 media query 也要同步覆寫 dict-table 的 min-width 與 col 寬度，
+   否則 .macro-table 的 min-width:610px 會蓋掉它（同特異性、後者勝），
+   導致「定義」欄被壓成 10px。 */
+.dict-table { min-width: 900px; font-size: 12.5px; }
+.dict-table col.c-name { width: 190px; }
+.dict-table col.c-def { width: auto; }
+.dict-table col.c-src { width: 104px; }
+.dict-table col.c-unit { width: 118px; }
+.dict-table col.c-range { width: 128px; }
+.dict-table col.c-ex { width: 118px; }
+
+.macro-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 8px 10px; text-align: left;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .3px;
+  color: var(--text-3); background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.macro-table tbody td {
+  padding: 10px; vertical-align: top;
+  border-bottom: 1px solid #eef1f6;
+  color: var(--text-2);
+  /* 固定佈局下，過長內容（長單位名、長技術代碼）必須換行，
+     否則會蓋到隔壁欄。overflow-wrap 讓無空白的長字串也能斷。 */
+  overflow-wrap: anywhere;
+}
+.macro-table tbody tr:last-child td { border-bottom: none; }
+.macro-table tbody tr:hover td { background: #fafbfd; }
+
+.mt-name { font-size: 13.5px; font-weight: 600; color: var(--text); line-height: 1.45; }
+.mt-def {
+  margin-top: 3px; font-size: 11.5px; line-height: 1.5;
+  color: var(--text-3); max-width: 42ch;
+}
+.mt-val {
+  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  color: var(--text); white-space: nowrap;
+}
+.mt-unit {
+  font-size: 11.5px; color: var(--text-3);
+  /* 不可 nowrap：在 table-layout:fixed 下，「十億美元（2017 年連鎖）」這類
+     長單位會直接溢出到隔壁欄。允許換行，讓它待在 104px 內。 */
+  line-height: 1.45;
+}
+.mt-date {
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--text-3); white-space: nowrap;
+}
+.mt-dim { color: var(--text-3); font-size: 12px; }
+.mt-why {
+  margin-top: 3px; font-size: 11px; line-height: 1.45;
+  color: var(--text-3); font-weight: 400;
+}
+.mt-empty {
+  padding: 22px 10px; text-align: center;
+  font-size: 12.5px; color: var(--text-3);
+}
+
+/* 不可用列：淡化但不隱藏，讓使用者知道「這個指標存在但拿不到」 */
+.row-unavail td { background: #fcfcfd; }
+.row-unavail .mt-name { color: var(--text-2); font-weight: 600; }
+.unavail-tag {
+  display: inline-block; padding: 2px 8px;
+  font-size: 11px; font-weight: 600; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-3);
+  border: 1px solid var(--border);
+}
+
+/* 歷史百分位長條 */
+.pct-wrap {
+  display: flex; align-items: center; justify-content: flex-end; gap: 7px;
+}
+.pct-bar {
+  flex: none; width: 44px; height: 6px;
+  background: #eef1f6; border-radius: 999px; overflow: hidden;
+}
+.pct-fill { display: block; height: 100%; border-radius: 999px; background: #b6c0cd; }
+/* 極高用琥珀引起注意；其餘用石板灰 —— 刻意不用紅綠與品牌藍，理由見區塊頂註解 */
+.pct-fill.hi { background: var(--warn); }
+.pct-fill.mid { background: #8fa0b3; }
+.pct-fill.lo { background: #b6c0cd; }
+.pct-num {
+  flex: none; min-width: 22px; text-align: right;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-3);
+}
+.range-flag { margin-left: 3px; font-size: 11px; cursor: help; }
+
+/* 來源標籤 */
+.src-badge {
+  display: inline-block; padding: 2px 8px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px;
+  border-radius: 5px; border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.src-fred { background: #eef2f6; color: #45566b; border-color: #d8e0e8; }
+.src-sec { background: #f3effa; color: #5b4a86; border-color: #ddd2ee; }
+.src-other { background: var(--surface-2); color: var(--text-3); }
+
+/* ---------------- FOMC ---------------- */
+/* 注意：.fomc-next 同時是「下次會議卡」與「清單項目狀態」，
+   兩者外觀必須切開，否則清單項目會被撐成大卡片。 */
+div.fomc-next {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 13px 15px; margin-bottom: 12px;
+  background: linear-gradient(135deg, #eef6ff, #f6faff);
+  border: 1px solid #cfe3fa; border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+}
+.fn-label {
+  flex: none; font-size: 11px; font-weight: 700; letter-spacing: .6px;
+  color: #0c447c; background: #d7e8fb;
+  padding: 3px 9px; border-radius: 999px;
+}
+.fn-date {
+  font-family: var(--mono); font-size: 17px; font-weight: 700;
+  color: #0c447c; letter-spacing: .3px;
+}
+.fn-sub { font-size: 12px; color: #1c5a8a; flex: 1 1 160px; min-width: 0; }
+
+.fomc-list { list-style: none; margin: 0; padding: 0; }
+.fomc-item {
+  display: grid; grid-template-columns: 104px 1fr auto;
+  align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  border-bottom: 1px solid #eef1f6;
+}
+.fomc-list .fomc-item:last-child { border-bottom: none; }
+.fi-date {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  color: var(--text); white-space: nowrap;
+}
+.fi-label {
+  font-size: 12.5px; color: var(--text-2); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fi-status {
+  flex: none; font-size: 10.5px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border);
+}
+.fomc-past .fi-date { color: var(--text-3); }
+.fomc-past .fi-label { color: var(--text-3); }
+.fomc-item.fomc-next { background: #f4f9ff; }
+.fomc-item.fomc-next .fi-date { color: var(--brand); }
+.fomc-item.fomc-next .fi-status {
+  background: var(--brand-soft); color: var(--brand); border-color: #c7d7fd;
+}
+.fomc-future .fi-status { background: #fff; color: var(--text-2); }
+.fomc-note {
+  margin: 12px 0 0; padding-top: 11px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px; line-height: 1.6; color: var(--text-3);
+}
+
+/* ---------------- 限制說明 ---------------- */
+/* .macro-limit-card 走預設 .card 外觀，不需額外宣告；
+   這裡只保留一個明確的錨點，避免日後被誤認為漏寫樣式。 */
+.macro-limit-card { padding-bottom: 14px; }
+
+.limit-list {
+  margin: 0; padding-left: 18px;
+  font-size: 12.5px; line-height: 1.7; color: var(--text-2);
+}
+.limit-list li { margin-bottom: 5px; }
+.limit-list li:last-child { margin-bottom: 0; }
+.limit-list ::marker { color: var(--text-3); }
+
+/* ---------------- 資料字典 ---------------- */
+.dict-intro {
+  margin: 0 0 12px; font-size: 12.5px; line-height: 1.65;
+  color: var(--text-2);
+  padding: 10px 13px; background: var(--surface-2);
+  border-radius: var(--radius-sm); border-left: 2px solid var(--border-strong);
+}
+.dict-intro strong { color: var(--text); }
+.dict-filter {
+  display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.dict-chip {
+  padding: 5px 13px; font-size: 12.5px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  color: var(--text-2); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  transition: all .14s;
+}
+.dict-chip:hover { border-color: #7ea6f8; color: var(--brand); }
+.dict-chip.active {
+  background: var(--brand-soft); color: var(--brand);
+  border-color: #c7d7fd;
+}
+.dict-key {
+  display: inline-block; margin-top: 4px;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--text-3); background: var(--surface-2);
+  padding: 1px 5px; border-radius: 4px;
+  word-break: break-all; max-width: 24ch;
+}
+.dict-def { font-size: 12px; line-height: 1.6; color: var(--text-2); max-width: 46ch; }
+.dict-link {
+  color: var(--brand); font-size: 12px; text-decoration: none;
+  border-bottom: 1px dotted #c7d7fd;
+}
+.dict-link:hover { border-bottom-style: solid; }
+.dict-range {
+  font-family: var(--mono); font-size: 11.5px;
+  /* 不可 nowrap：值域欄只有 128px，"[0, 20]合理值域，超出即視為資料異常"
+     這段不換行就會溢出到隔壁欄（已實測）。 */
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.dict-ex {
+  font-family: var(--mono); font-size: 13px; font-weight: 600;
+  color: var(--text);
+}
+.dict-conv {
+  margin-top: 16px; padding-top: 13px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px; line-height: 1.7; color: var(--text-2);
+}
+.dict-conv h3 {
+  margin: 0 0 7px; font-size: 12.5px; font-weight: 700;
+  color: var(--text); letter-spacing: .2px;
+}
+.dict-conv ul { margin: 0; padding-left: 18px; }
+.dict-conv li { margin-bottom: 4px; }
+.dict-conv ::marker { color: var(--text-3); }
+
+/* ---------------- AI 解讀 ---------------- */
+/* 四種傾向等權呈現：不讓任何一種顏色看起來「才是對的」 */
+.st-hawk    { --st: #b45309; --st-bg: #fff7e8; --st-line: #f2ddb4; }
+.st-dove    { --st: #0e7490; --st-bg: #ecf8fb; --st-line: #c3e5ee; }
+.st-neutral { --st: #475467; --st-bg: #f4f6fa; --st-line: #dde3ea; }
+.st-mixed   { --st: #6d49a8; --st-bg: #f4f0fb; --st-line: #ddd2ee; }
+.st-pos     { --st: var(--up); --st-bg: var(--up-soft); --st-line: #f6c9c9; }
+.st-neg     { --st: var(--down); --st-bg: var(--down-soft); --st-line: #b7e5cf; }
+.st-unknown { --st: #8a94a6; --st-bg: #f8fafc; --st-line: #e3e8ef; }
+
+.interp-overall {
+  display: flex; align-items: flex-start; gap: 13px;
+  padding: 14px 15px; margin-bottom: 14px;
+  background: var(--st-bg, var(--surface-2));
+  border: 1px solid var(--st-line, var(--border));
+  border-left: 3px solid var(--st, var(--text-3));
+  border-radius: var(--radius-sm);
+}
+.io-tag {
+  flex: none; padding: 3px 11px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
+  color: #fff; background: var(--st, var(--text-3));
+}
+.io-body { min-width: 0; flex: 1 1 auto; }
+.io-body strong {
+  display: block; font-size: 13.5px; line-height: 1.6;
+  color: var(--text); font-weight: 600; margin-bottom: 5px;
+}
+.io-counts {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-3); letter-spacing: .2px;
+}
+
+.interp-list { display: flex; flex-direction: column; gap: 11px; }
+
+.interp-card {
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--st, var(--border-strong));
+  border-radius: var(--radius-sm);
+}
+.ic-head {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin-bottom: 7px;
+}
+.ic-tag {
+  flex: none; padding: 2px 9px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--st, var(--text-2)); background: var(--st-bg, var(--surface-2));
+  border: 1px solid var(--st-line, var(--border));
+}
+/* .ic-tag 同時掛 st-* ，需覆寫顏色以免被上面 .st-* 的 --st 語意影響 */
+.ic-tag.st-hawk, .ic-tag.st-dove, .ic-tag.st-neutral,
+.ic-tag.st-mixed, .ic-tag.st-pos, .ic-tag.st-neg, .ic-tag.st-unknown {
+  color: var(--st); background: var(--st-bg); border-color: var(--st-line);
+}
+.ic-head h3 {
+  margin: 0; font-size: 13.5px; font-weight: 600;
+  color: var(--text); line-height: 1.5; min-width: 0;
+}
+.ic-detail {
+  margin: 0; font-size: 12.5px; line-height: 1.72;
+  color: var(--text-2);
+}
+.ic-evidence {
+  margin-top: 11px; padding: 10px 12px;
+  background: var(--surface-2); border-radius: var(--radius-sm);
+}
+.ice-head {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .6px;
+  color: var(--text-3); margin-bottom: 6px;
+}
+.ic-evidence ul { list-style: none; margin: 0; padding: 0; }
+.ic-evidence li {
+  display: grid; grid-template-columns: 1fr auto auto;
+  align-items: baseline; gap: 9px;
+  padding: 3px 0; font-size: 12px;
+}
+.ice-k { color: var(--text-2); min-width: 0; }
+.ice-v {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  color: var(--text); white-space: nowrap;
+}
+.ice-d {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--text-3); white-space: nowrap;
+}
+.ic-caveat {
+  margin: 10px 0 0; padding: 8px 11px;
+  font-size: 11.5px; line-height: 1.6;
+  color: #7c4a03; background: var(--warn-soft);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--warn);
+}
+
+/* LLM 潤飾區 */
+.interp-llm {
+  padding: 13px 15px;
+  background: linear-gradient(135deg, #f6faff, #fbfdff);
+  border: 1px solid #cfe3fa; border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+}
+.illm-head {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .6px;
+  color: #0c447c; margin-bottom: 6px;
+}
+.interp-llm p {
+  margin: 0; font-size: 12.8px; line-height: 1.75; color: var(--text-2);
+}
+.interp-llm-note {
+  padding: 9px 12px; font-size: 11.5px; line-height: 1.6;
+  color: var(--text-3); background: var(--surface-2);
+  border-radius: var(--radius-sm); border-left: 2px solid var(--border-strong);
+}
+
+/* 資料缺口：明確說「算不出來」而不是藏起來 */
+.interp-gaps {
+  margin-top: 13px; padding: 10px 13px;
+  font-size: 11.5px; line-height: 1.65;
+  color: #7c4a03; background: var(--warn-soft);
+  border-radius: var(--radius-sm); border-left: 2px solid var(--warn);
+}
+.interp-gaps strong { color: #6b3f02; }
+
+.interp-empty {
+  padding: 24px 16px; text-align: center;
+  background: var(--surface-2); border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+}
+.interp-empty strong {
+  display: block; font-size: 13.5px; color: var(--text); margin-bottom: 6px;
+}
+.interp-empty p {
+  margin: 0 auto; max-width: 46ch;
+  font-size: 12.5px; line-height: 1.65; color: var(--text-2);
+}
+.interp-disc {
+  margin: 14px 0 0; padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px; line-height: 1.65; color: var(--text-3);
+}
+
+/* ---------------- 響應式 ---------------- */
+@media (max-width: 900px) {
+  /* 6 欄合計寬度必須 < min-width，否則 name 欄被壓成 0（已實測踩到） */
+  .macro-table { min-width: 660px; }
+  .macro-table col.c-val { width: 112px; }
+  .macro-table col.c-unit { width: 96px; }
+  .macro-table col.c-date { width: 108px; }
+  .macro-table col.c-pct { width: 118px; }
+  .macro-table col.c-src { width: 84px; }
+  /* 字典表必須一併覆寫，否則被上面的 .macro-table 規則蓋掉 */
+  .dict-table { min-width: 840px; }
+  .dict-table col.c-name { width: 170px; }
+  .dict-table col.c-src { width: 96px; }
+  .dict-table col.c-unit { width: 108px; }
+  .dict-table col.c-range { width: 118px; }
+  .dict-table col.c-ex { width: 108px; }
+}
+
+@media (max-width: 640px) {
+  .mh-title h2 { font-size: 16px; }
+  .mh-actions { width: 100%; justify-content: space-between; }
+  .mh-stamp { font-size: 11px; }
+  .mh-tab { padding: 7px 10px; font-size: 12.5px; }
+  .mh-search-box { flex-wrap: nowrap; }
+  /* 手機：固定欄位合計 460px + 指標欄 ≥ 150px = 610px。
+     表格靠 .mt-wrap 橫向捲動，捲動是預期行為，不是破版。 */
+  .macro-table { min-width: 610px; font-size: 12.5px; }
+  .macro-table col.c-val { width: 96px; }
+  .macro-table col.c-unit { width: 88px; }
+  .macro-table col.c-date { width: 100px; }
+  .macro-table col.c-pct { width: 100px; }
+  .macro-table col.c-src { width: 76px; }
+  /* 字典表：定義欄是重點，手機上讓它保有 200px，其餘縮到剛好 */
+  .dict-table { min-width: 780px; }
+  .dict-table col.c-name { width: 160px; }
+  .dict-table col.c-src { width: 88px; }
+  .dict-table col.c-unit { width: 104px; }
+  .dict-table col.c-range { width: 110px; }
+  .dict-table col.c-ex { width: 100px; }
+  .macro-table tbody td { padding: 9px 8px; }
+  .macro-table thead th { padding: 7px 8px; }
+  .mt-val { font-size: 13px; }
+  .mt-def { display: none; }          /* 定義說明摺疊，避免每列過高 */
+  .fomc-item { grid-template-columns: 96px 1fr auto; gap: 8px; padding: 8px 6px; }
+  .fi-label { font-size: 12px; }
+  .ic-evidence li { grid-template-columns: 1fr auto; row-gap: 1px; }
+  .ice-d { grid-column: 2; text-align: right; }
+  .interp-overall { flex-direction: column; align-items: flex-start; gap: 9px; }
+  .limit-list { font-size: 12px; }
+}
+
+@media (max-width: 380px) {
+  .mh-tab { padding: 6px 8px; font-size: 11.5px; }
+  .btn-sm { padding: 6px 11px; font-size: 12px; }
+  .fn-date { font-size: 15px; }
+  .fomc-item { grid-template-columns: 1fr auto; }
+  .fi-label { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
+  .dict-chip { padding: 4px 10px; font-size: 12px; }
+  /* 360px 以下再縮一級，確保指標欄至少 140px */
+  .macro-table { min-width: 560px; font-size: 12px; }
+  .macro-table col.c-val { width: 88px; }
+  .macro-table col.c-unit { width: 80px; }
+  .macro-table col.c-date { width: 92px; }
+  .macro-table col.c-pct { width: 88px; }
+  .macro-table col.c-src { width: 68px; }
+  .dict-table { min-width: 720px; }
+  .dict-table col.c-name { width: 150px; }
+  .dict-table col.c-ex { width: 92px; }
+}
+
+/* 列印時表格不要被截斷 */
+@media print {
+  .mt-wrap { overflow: visible; }
+  .macro-table, .dict-table { min-width: 0; }
+  .macro-notice, .mh-tabs, .mh-search { display: none; }
+}

@@ -11,6 +11,10 @@
  *   GET  /api/screen?…               AI 選股：依條件即時篩選
  *   GET  /api/picks[?run=1]          每日候選清單（惰性補跑）
  *   GET  /api/news?symbol=           相關新聞
+ *   GET  /api/macro                  宏觀儀表板（全市場）
+ *   GET  /api/macro/:symbol          個股財報 + 宏觀背景
+ *   GET  /api/data-dict              資料字典（欄位定義／來源／值域／範例值）
+ *   GET  /api/interpret              宏觀／財報 AI 解讀（scope=macro|fundamentals）
  *   POST /api/notify                 發送 Telegram 通知
  *   GET  /api/config                 通知設定狀態
  *
@@ -32,6 +36,8 @@ const screener = require('./lib/screener');
 const scheduler = require('./lib/scheduler');
 const pool = require('./lib/pool');
 const credibility = require('./lib/credibility');
+const macro = require('./lib/macro');
+const interpret = require('./lib/interpret');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -654,6 +660,116 @@ const server = http.createServer(async (req, res) => {
       if (!raw) return sendError(res, 400, 'EMPTY', '請提供股票代碼');
       const items = await yahoo.news(raw, 8, (q.name || '').trim() || null);
       return sendJSON(res, 200, { ok: true, count: items.length, news: items });
+    }
+
+    /* ==========================================================
+       宏觀經濟與基本面
+       ----------------------------------------------------------
+       四個端點，職責各自獨立：
+
+         GET /api/macro              宏觀儀表板（全市場，不帶代碼）
+         GET /api/macro/:symbol      個股財報 + 宏觀背景
+         GET /api/data-dict          資料字典（欄位定義／來源／值域／範例）
+         GET /api/interpret          解讀（可指定 scope 與 symbol）
+
+       全部回傳統一信封 {ok, ...}，失敗時 {ok:false, error:{code,message,hint}}，
+       與本專案既有端點一致，前端可用同一套 SA.api() 處理。
+       ========================================================== */
+
+    if (pathname === '/api/macro' && req.method === 'GET') {
+      if (q.preview === '1') {
+        // 只回報快取狀態，不觸發上游抓取（前端用來決定要不要求 Loading）
+        const hit = macro.cache.get('macro:series');
+        return sendJSON(res, 200, {
+          ok: true, preview: true, cached: !!hit,
+          note: hit ? '已有快取，載入會很快' : '無快取，首次載入需抓取 18 個序列（約 5–15 秒）',
+        });
+      }
+      const out = await macro.getMacroOverview({ force: q.refresh === '1' });
+      return sendJSON(res, 200, out);
+    }
+
+    // /api/macro/AAPL
+    if (pathname.startsWith('/api/macro/') && req.method === 'GET') {
+      const raw = decodeURIComponent(pathname.slice('/api/macro/'.length)).trim();
+      if (!raw) return sendError(res, 400, 'EMPTY', '請在路徑提供股票代碼，例如 /api/macro/AAPL');
+
+      const norm = normalizeSymbol(raw);
+      if (!norm.ok) return sendError(res, 400, norm.code, norm.message, norm.hint);
+
+      // 市值／股價由既有 analyze 提供，供本益比計算；失敗不影響財報本身
+      let ctx = null;
+      try {
+        const d = await analyzer.analyze(norm.value);
+        ctx = {
+          price: d.meta.price, currency: d.meta.currency,
+          priceAsOf: d.meta.asOf || null, name: d.meta.name,
+        };
+      } catch (e) {
+        ctx = { price: null, note: `無法取得股價（${e.message}），本益比將不計算` };
+      }
+
+      const out = await macro.getSymbolOverview(norm.value, {
+        force: q.refresh === '1', ctx,
+      });
+      if (!out.ok) return sendError(res, 400, out.code, out.message, out.hint);
+      return sendJSON(res, 200, { ...out, requestedSymbol: raw });
+    }
+
+    if (pathname === '/api/data-dict' && req.method === 'GET') {
+      const out = await macro.getDataDictionary();
+      return sendJSON(res, 200, out);
+    }
+
+    /*
+     * 解讀端點。
+     *
+     * scope=macro        宏觀解讀（含 LLM 潤飾，若已設定 Key）
+     * scope=fundamentals 財報解讀（需 symbol）
+     *
+     * mode 參數：
+     *   mode=rule（預設）  只回規則層結果
+     *   mode=llm          額外嘗試 LLM 潤飾，失敗自動退回 rule 並在 note 說明
+     */
+    if (pathname === '/api/interpret' && req.method === 'GET') {
+      const scope = (q.scope || 'macro').toLowerCase();
+      const wantLlm = String(q.mode || 'rule').toLowerCase() === 'llm';
+
+      if (scope === 'macro') {
+        const ov = await macro.getMacroOverview({ force: q.refresh === '1' });
+        let llm = null;
+        if (wantLlm) llm = await interpret.polishWithLlm(ov.interpretation);
+        return sendJSON(res, 200, {
+          ok: true,
+          scope: 'macro',
+          interpretation: ov.interpretation,
+          llm: llm ? { text: llm.text, mode: llm.mode, note: llm.note } : null,
+          generatedAt: ov.generatedAt,
+        });
+      }
+
+      if (scope === 'fundamentals') {
+        const raw = (q.symbol || '').trim();
+        if (!raw) return sendError(res, 400, 'EMPTY', 'scope=fundamentals 需提供 symbol 參數');
+        const norm = normalizeSymbol(raw);
+        if (!norm.ok) return sendError(res, 400, norm.code, norm.message, norm.hint);
+
+        const out = await macro.getSymbolOverview(norm.value, {});
+        let llm = null;
+        if (wantLlm && out.interpretation && out.interpretation.available !== false) {
+          llm = await interpret.polishWithLlm(out.interpretation);
+        }
+        return sendJSON(res, 200, {
+          ok: true,
+          scope: 'fundamentals',
+          symbol: out.symbol,
+          interpretation: out.interpretation,
+          llm: llm ? { text: llm.text, mode: llm.mode, note: llm.note } : null,
+          generatedAt: out.generatedAt,
+        });
+      }
+
+      return sendError(res, 400, 'BAD_SCOPE', `不支援的 scope：${scope}`, '可用：macro、fundamentals');
     }
 
     if (pathname === '/api/notify' && req.method === 'POST') {

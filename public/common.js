@@ -119,9 +119,11 @@
 
   /* ---------------- 路由 ---------------- */
   /**
-   * 三頁路由，以 hash 表示，不打擾伺服器（靜態服務不需要 SPA fallback 規則）：
+   * 四頁路由，以 hash 表示，不打擾伺服器（靜態服務不需要 SPA fallback 規則）：
    *   #/predict         K 線預測（預設）
    *   #/screen          AI 選股
+   *   #/macro           宏觀經濟儀表板（全市場，不帶代碼）
+   *   #/macro/AAPL      個股財報與 AI 解讀
    *   #/detail/AAPL     個股詳情（沿用 K 線預測頁的完整分析區塊）
    *
    * 為什麼詳情頁不是獨立一份 DOM：
@@ -129,8 +131,13 @@
    *   互相依賴的渲染邏輯。複製一份等於把 19 個測試鎖定的欄位也複製一份，
    *   兩邊遲早不同步。改為「同一份結果區塊、兩種進場模式」：
    *   詳情模式只是額外顯示返回列，內容完全相同。
+   *
+   * 為什麼宏觀頁要獨立一份 DOM：
+   *   它的資料粒度是「全市場」（利率、FOMC、通膨），不隨個股變動。
+   *   併進詳情頁會導致換一檔股票就重抓一次 FRED，且兩者的失敗模式
+   *   完全不同（K 線逾時 vs SEC 逾時），混在一起會互相牽連。
    */
-  var ROUTES = { predict: 'predict', screen: 'screen', detail: 'detail' };
+  var ROUTES = { predict: 'predict', screen: 'screen', macro: 'macro', detail: 'detail' };
 
   function parseHash() {
     var h = String(location.hash || '').replace(/^#\/?/, '');
@@ -138,6 +145,9 @@
     var parts = h.split('/').filter(Boolean);
     var head = parts[0];
     if (head === 'screen') return { name: 'screen', symbol: null };
+    if (head === 'macro') {
+      return { name: 'macro', symbol: parts[1] ? decodeURIComponent(parts[1]) : null };
+    }
     if (head === 'detail') return { name: 'detail', symbol: parts[1] ? decodeURIComponent(parts[1]) : null };
     return { name: 'predict', symbol: null };
   }
@@ -154,9 +164,9 @@
     });
   }
 
-  var handlers = { onPredict: null, onScreen: null, onDetail: null };
+  var handlers = { onPredict: null, onScreen: null, onMacro: null, onDetail: null };
 
-  /** 由 app.js / screen.js 註冊各自的進場處理 */
+  /** 由 app.js / screen.js / macro.js 註冊各自的進場處理 */
   SA.onRoute = function (map) {
     Object.keys(map || {}).forEach(function (k) {
       if (k in handlers) handlers[k] = map[k];
@@ -171,15 +181,18 @@
   function showView(name) {
     var chart = document.getElementById('viewChart');
     var screen = document.getElementById('viewScreen');
-    if (chart) chart.hidden = name === 'screen';
+    var macro = document.getElementById('viewMacro');
+    if (chart) chart.hidden = name !== 'chart';
     if (screen) screen.hidden = name !== 'screen';
+    if (macro) macro.hidden = name !== 'macro';
   }
 
   var lastDispatched = '';
 
   function dispatch() {
     var r = parseHash();
-    showView(r.name === 'screen' ? 'screen' : 'chart');
+    var view = r.name === 'screen' ? 'screen' : (r.name === 'macro' ? 'macro' : 'chart');
+    showView(view);
     setActiveNav(r.name);
     var sig = r.name + '|' + (r.symbol || '');
     // 同一個 hash 重複觸發時不重跑（避免 hashchange 與手動呼叫互相重複請求）
@@ -187,6 +200,7 @@
     lastDispatched = sig;
 
     if (r.name === 'screen' && handlers.onScreen) handlers.onScreen();
+    else if (r.name === 'macro' && handlers.onMacro) handlers.onMacro(r.symbol);
     else if (r.name === 'detail' && handlers.onDetail) handlers.onDetail(r.symbol);
     else if (r.name === 'predict' && handlers.onPredict) handlers.onPredict();
   }

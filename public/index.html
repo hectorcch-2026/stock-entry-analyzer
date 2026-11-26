@@ -40,10 +40,11 @@
       </div>
     </div>
 
-    <!-- 三頁導航：K 線預測 / AI 選股 /（詳情頁時才出現「詳情」） -->
+    <!-- 四頁導航：K 線預測 / AI 選股 / 宏觀與基本面 /（詳情頁時才出現「詳情」） -->
     <nav class="main-nav" id="mainNav" aria-label="主要頁面">
       <a href="#/predict" data-route="predict" class="nav-item active">K 線預測</a>
       <a href="#/screen" data-route="screen" class="nav-item">AI 選股</a>
+      <a href="#/macro" data-route="macro" class="nav-item">宏觀與基本面</a>
       <a href="#/predict" data-route="detail" class="nav-item nav-detail" hidden>個股詳情</a>
     </nav>
 
@@ -651,10 +652,165 @@
 
   </div><!-- /#viewScreen -->
 
+  <!-- ============ 檢視三：宏觀與基本面 ============ -->
+  <div id="viewMacro" hidden>
+
+    <!-- 標題列 -->
+    <section class="card macro-head-card">
+      <div class="mh-row">
+        <div class="mh-title">
+          <h2 id="macroTitle">宏觀經濟儀表板</h2>
+          <p class="mh-sub" id="macroSub">資料來源：FRED（聖路易斯聯準銀行）＋ Federal Reserve</p>
+        </div>
+        <div class="mh-actions">
+          <span class="mh-stamp" id="macroStamp">—</span>
+          <button type="button" id="macroRefresh" class="btn btn-ghost btn-sm">
+            <span class="spinner" hidden aria-hidden="true"></span>
+            <span class="btn-label">重新整理</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 個股查詢（在宏觀頁也能直接跳去看某檔的財報） -->
+      <form id="macroSymbolForm" class="mh-search" autocomplete="off">
+        <label class="mh-search-label" for="macroSymbol">查看個股財報</label>
+        <div class="mh-search-box">
+          <input id="macroSymbol" class="mh-input" type="text" placeholder="輸入代碼，如 AAPL、MSFT（港股無 SEC 財報）"
+                 maxlength="24" spellcheck="false" aria-label="股票代碼">
+          <button type="submit" id="macroSymbolGo" class="btn btn-primary btn-sm">查看</button>
+        </div>
+      </form>
+
+      <!-- 分頁切換 -->
+      <div class="mh-tabs" role="tablist" aria-label="檢視模式">
+        <button type="button" class="mh-tab active" role="tab" data-mtab="overview" aria-selected="true">宏觀數據</button>
+        <button type="button" class="mh-tab" role="tab" data-mtab="dict" aria-selected="false">資料字典</button>
+        <button type="button" class="mh-tab" role="tab" data-mtab="interpret" aria-selected="false">AI 解讀</button>
+      </div>
+    </section>
+
+    <!-- 狀態提示（載入中 / 錯誤 / 降級） -->
+    <div id="macroNotice" class="macro-notice" hidden></div>
+
+    <!-- 分頁一：宏觀數據表 -->
+    <section id="tabOverview" class="macro-panel">
+      <section class="card" aria-labelledby="macroTableTitle">
+        <header class="card-head">
+          <h2 id="macroTableTitle">宏觀指標</h2>
+          <span class="badge badge-neutral" id="macroCount">—</span>
+        </header>
+
+        <div class="mt-wrap">
+          <table class="macro-table" id="macroTable">
+            <caption class="sr-only">宏觀經濟指標列表，含數值、單位、資料日期與歷史位置</caption>
+            <colgroup>
+              <col class="c-name"><col class="c-val"><col class="c-unit">
+              <col class="c-date"><col class="c-pct"><col class="c-src">
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">指標</th>
+                <th scope="col" class="ta-r">數值</th>
+                <th scope="col">單位</th>
+                <th scope="col">資料日期</th>
+                <th scope="col" class="ta-r">歷史百分位</th>
+                <th scope="col">來源</th>
+              </tr>
+            </thead>
+            <tbody id="macroTableBody">
+              <tr><td colspan="6" class="mt-empty">載入中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- FOMC 會議時程 -->
+      <section class="card" aria-labelledby="fomcTitle">
+        <header class="card-head">
+          <h2 id="fomcTitle">FOMC 會議時程</h2>
+          <span class="badge badge-neutral" id="fomcBadge">—</span>
+        </header>
+        <div class="fomc-next" id="fomcNext" hidden></div>
+        <ul class="fomc-list" id="fomcList">
+          <li class="mt-empty">載入中…</li>
+        </ul>
+        <p class="fomc-note" id="fomcNote"></p>
+      </section>
+
+      <!-- 限制說明 -->
+      <section class="card macro-limit-card" aria-labelledby="limitTitle">
+        <header class="card-head">
+          <h2 id="limitTitle">資料限制說明</h2>
+        </header>
+        <ul class="limit-list" id="macroLimits"></ul>
+      </section>
+    </section>
+
+    <!-- 分頁二：資料字典 -->
+    <section id="tabDict" class="macro-panel" hidden>
+      <section class="card" aria-labelledby="dictTitle">
+        <header class="card-head">
+          <h2 id="dictTitle">資料字典</h2>
+          <span class="badge badge-neutral" id="dictCount">—</span>
+        </header>
+        <p class="dict-intro">
+          每個資料項的<strong>欄位定義、資料來源、合理值域與範例值</strong>。
+          範例值取自實際抓取的資料，非固定常數。
+        </p>
+        <div class="dict-filter" id="dictFilter">
+          <button type="button" class="dict-chip active" data-dgroup="all">全部</button>
+          <button type="button" class="dict-chip" data-dgroup="宏觀經濟">宏觀經濟</button>
+          <button type="button" class="dict-chip" data-dgroup="企業財報">企業財報</button>
+        </div>
+        <div class="mt-wrap">
+          <table class="macro-table dict-table">
+            <caption class="sr-only">資料字典：欄位定義、來源、值域與範例值</caption>
+            <colgroup>
+              <col class="c-name"><col class="c-def"><col class="c-src">
+              <col class="c-unit"><col class="c-range"><col class="c-ex">
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">欄位</th>
+                <th scope="col">定義</th>
+                <th scope="col">來源</th>
+                <th scope="col">單位／頻率</th>
+                <th scope="col">合理值域</th>
+                <th scope="col" class="ta-r">範例值</th>
+              </tr>
+            </thead>
+            <tbody id="dictBody">
+              <tr><td colspan="6" class="mt-empty">載入中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dict-conv" id="dictConv"></div>
+      </section>
+    </section>
+
+    <!-- 分頁三：AI 解讀 -->
+    <section id="tabInterpret" class="macro-panel" hidden>
+      <section class="card" aria-labelledby="interpTitle">
+        <header class="card-head">
+          <h2 id="interpTitle">AI 解讀</h2>
+          <span class="badge" id="interpMode">—</span>
+        </header>
+        <div id="interpOverall" class="interp-overall" hidden></div>
+        <div id="interpList" class="interp-list">
+          <p class="mt-empty">載入中…</p>
+        </div>
+        <div id="interpGaps" class="interp-gaps" hidden></div>
+        <p class="interp-disc" id="interpDisc"></p>
+      </section>
+    </section>
+
+  </div><!-- /#viewMacro -->
+
 </main>
 
 <script src="/common.js"></script>
 <script src="/app.js"></script>
 <script src="/screen.js"></script>
+<script src="/macro.js"></script>
 </body>
 </html>
