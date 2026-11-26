@@ -1133,6 +1133,20 @@ const server = http.createServer(async (req, res) => {
      *   perSector  每版塊檔數 1–30（預設 10）
      *   refresh=1  略過快取
      */
+    /* 暫時的診斷端點：確認雲端取不到市值時卡在哪一步。
+       驗證完立刻移除。 */
+    if (pathname === '/api/rrg/treemap/_diag' && req.method === 'GET') {
+      let session = null;
+      try { session = await treemapService.getCapSession(); } catch (e) { /* 見 diag */ }
+      return sendJSON(res, 200, {
+        hasCookie: !!(session && session.cookie),
+        hasCrumb: !!(session && session.crumb),
+        diag: treemapService.getCapDiag(),
+        node: process.version,
+        ua: req.headers['user-agent'] || null,
+      });
+    }
+
     if (pathname === '/api/rrg/treemap' && req.method === 'GET') {
       // 版塊驗證：與 /api/rrg 共用同一套規則，避免兩邊各自為政
       const sectorCheck = rrg.normSectors(q.sectors);
