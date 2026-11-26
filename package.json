@@ -15,7 +15,7 @@
     "test:deployed": "node tests/e2e-deployed.mjs",
     "test:escape": "node tests/notify-escape.cjs",
     "test:hidden": "node tests/hidden-visibility.mjs",
-    "test:all": "node tests/notify-escape.cjs && node tests/hidden-visibility.mjs && node tests/macro-unit.cjs && node tests/rrg-unit.cjs && node tests/econ-store-unit.cjs && node tests/adv-modules.mjs && node tests/chart-overlays.mjs && node tests/e2e-layout.mjs && node tests/e2e-flow.mjs && node tests/e2e-notify.mjs && node tests/e2e-pwa.mjs && node tests/e2e-ios-standalone.mjs",
+    "test:all": "node tests/notify-escape.cjs && node tests/hidden-visibility.mjs && node tests/macro-unit.cjs && node tests/rrg-unit.cjs && node tests/holdings-unit.cjs && node tests/econ-store-unit.cjs && node tests/adv-modules.mjs && node tests/chart-overlays.mjs && node tests/e2e-layout.mjs && node tests/e2e-flow.mjs && node tests/e2e-notify.mjs && node tests/e2e-pwa.mjs && node tests/e2e-ios-standalone.mjs",
     "test:adv": "node tests/adv-modules.mjs",
     "test:chart": "node tests/chart-overlays.mjs",
     "test:forecast": "node tests/forecast-unit.cjs",
@@ -31,6 +31,8 @@
     "test:macro": "node tests/macro-unit.cjs",
     "test:rrg": "node tests/rrg-unit.cjs",
     "test:e2e-rrg": "node tests/e2e-rrg.mjs",
+    "test:holdings": "node tests/holdings-unit.cjs",
+    "test:e2e-holdings": "node tests/e2e-holdings.mjs",
     "test:e2e-macro": "node tests/e2e-macro.mjs",
     "test:econ": "node tests/econ-store-unit.cjs"
   },

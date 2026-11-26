@@ -2311,3 +2311,97 @@ div.fomc-next {
   .rrg-table-wrap { overflow: visible; }
   .rrg-table { min-width: 0; }
 }
+
+/* ===================================================
+   版塊權重股（RRG 模組擴充）
+   ---------------------------------------------------
+   表格沿用 .rrg-table 的既有樣式，這裡只補它沒有的：
+   代碼/公司名雙行、報酬正負色、可點列的視覺提示。
+   =================================================== */
+
+.rrg-hold-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rrg-hold-pick {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-2);
+}
+.rrg-select-sm { padding: 4px 8px; font-size: 12px; min-width: 92px; }
+
+.rrg-hold-meta {
+  margin: 0 0 10px; font-size: 12px; color: var(--text-3); line-height: 1.7;
+}
+.rrg-hold-meta b { color: var(--text); font-weight: 600; }
+.rrg-hold-meta.err { color: var(--warn); }
+.rrg-hold-warn { color: var(--warn); }
+
+.rrg-hold-table tbody td.rrg-hold-name {
+  white-space: nowrap; max-width: 260px;
+}
+.rrg-hold-tick {
+  font-family: var(--mono); font-weight: 700; color: var(--text);
+  font-size: 13px;
+}
+.rrg-hold-co {
+  display: block; font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; max-width: 240px;
+  margin-top: 1px;
+}
+.rrg-hold-w { color: var(--text-2); }
+
+/* 報酬：正紅負綠（台／港／陸股慣例），與專案其他模組一致 */
+.rrg-ret { font-weight: 600; white-space: nowrap; }
+.rrg-ret.up { color: var(--up); }
+.rrg-ret.down { color: var(--down); }
+.rrg-ret.flat { color: var(--text-3); }
+.rrg-ret.none { color: var(--text-3); font-weight: 400; }
+
+/* 可點列：整列可點，但游標與 hover 要明確表示「這裡可以按」 */
+.rrg-hold-row[data-symbol] { cursor: pointer; }
+.rrg-hold-row[data-symbol]:hover { background: var(--brand-soft); }
+.rrg-hold-row[data-symbol]:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: -2px;
+}
+.rrg-hold-row.no-data { cursor: default; }
+.rrg-hold-row.no-data:hover { background: transparent; }
+
+.rrg-hold-go {
+  display: inline-block; font-size: 11.5px; font-weight: 600;
+  color: var(--brand); text-decoration: none;
+  padding: 2px 8px; border-radius: 6px;
+  border: 1px solid transparent;
+}
+.rrg-hold-go:hover { background: var(--brand-soft); border-color: #c7d7fd; }
+.rrg-hold-row[data-symbol]:hover .rrg-hold-go { background: #fff; border-color: #c7d7fd; }
+
+.rrg-hold-un { font-size: 11px; color: var(--text-3); }
+.rrg-hold-retry {
+  margin-left: 10px; padding: 3px 10px; font-size: 11.5px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); cursor: pointer;
+}
+.rrg-hold-retry:hover { border-color: var(--brand); color: var(--brand); }
+
+/* 載入中的小轉圈：純 CSS，不依賴既有 .spinner 的尺寸 */
+.rrg-hold-spin {
+  display: inline-block; width: 11px; height: 11px; margin-right: 7px;
+  border: 2px solid var(--border-strong); border-top-color: var(--brand);
+  border-radius: 50%; vertical-align: -1px;
+  animation: rrg-hold-spin .8s linear infinite;
+}
+@keyframes rrg-hold-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .rrg-hold-spin { animation: none; border-top-color: var(--border-strong); }
+}
+
+@media (max-width: 720px) {
+  .rrg-hold-tools { width: 100%; }
+  .rrg-hold-pick { flex: 1 1 auto; }
+  .rrg-select-sm { width: 100%; }
+  .rrg-hold-co { max-width: 120px; }
+  /* 手機上 7 欄放不下，讓表格可橫向捲動（與版塊明細表一致） */
+  .rrg-hold-table { min-width: 560px; }
+}
+
+@media print {
+  .rrg-hold-tools { display: none; }
+  .rrg-hold-table { min-width: 0; }
+}

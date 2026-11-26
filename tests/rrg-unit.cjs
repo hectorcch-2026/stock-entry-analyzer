@@ -713,7 +713,15 @@ t('M4 sw.js 預快取清單包含新資產且版本已遞增', () => {
   assert.ok(sw.indexOf("'/rrg-client.js'") >= 0, 'SHELL_ASSETS 需包含 rrg-client.js');
   const m = sw.match(/const VERSION = '([^']+)'/);
   assert.ok(m, '必須有 VERSION 常數');
-  assert.strictEqual(m[1], 'v1.0.5', `新增頁面必須升版，目前 ${m[1]}`);
+  /* 斷言「不低於某個下限」而不是「等於某個值」：
+     寫死等於版本的話，每次為了新功能升版都會讓這條測試失敗，
+     而失敗訊息（「必須升版」）在升版後反而變成誤導。
+     真正要鎖的是「不能退回舊版」——只要 >= v1.0.5 就代表殼會更新。 */
+  const ver = m[1];
+  const num = ver.replace(/^v/, '').split('.').map(Number);
+  const min = [1, 0, 5];
+  const cmp = num[0] - min[0] || num[1] - min[1] || (num[2] || 0) - min[2];
+  assert.ok(cmp >= 0, `版本必須 >= v1.0.5（新頁面需要升版才會更新殼），目前 ${ver}`);
 });
 
 t('M5 rrg-client.js 不使用 ES6+ 語法（與其他前端檔案一致，走 ES5）', () => {

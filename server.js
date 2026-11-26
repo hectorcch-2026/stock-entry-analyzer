@@ -41,6 +41,7 @@ const interpret = require('./lib/interpret');
 const econSync = require('./lib/econ-sync');
 const rrg = require('./lib/rrg');
 const rrgService = require('./lib/rrg-service');
+const sectorHoldings = require('./lib/sector-holdings');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1009,6 +1010,104 @@ const server = http.createServer(async (req, res) => {
           trailMin: rrg.TRAIL_MIN,
           trailMax: rrg.TRAIL_MAX,
         },
+      });
+    }
+
+    /**
+     * 版塊權重股 + 四區間報酬
+     * ────────────────────────────────────────────────────────
+     * GET /api/rrg/holdings?sector=XLK&limit=10
+     *
+     * 為什麼放在 /api/rrg 之下：
+     *   它服務的是同一個檢視（版塊輪動），使用者心智上是「點開 XLK 看裡面有誰」。
+     *   獨立成 /api/holdings 會讓兩個端點的版塊代碼驗證各自為政，
+     *   日後新增版塊容易只改一邊。
+     *
+     * 為什麼持股與報酬合成一支端點：
+     *   前端若分兩次請求，會出現「表格已長出 10 列但數字全是空白」的中間狀態，
+     *   使用者會誤以為資料壞了。合成一支讓「有列就有數」成為不變式。
+     */
+    if (pathname === '/api/rrg/holdings' && req.method === 'GET') {
+      const sectorKey = String(q.sector || '').toUpperCase().trim();
+      if (!sectorKey) {
+        return sendError(res, 400, 'MISSING_SECTOR', '缺少 sector 參數',
+          `可用版塊：${sectorHoldings.SECTOR_KEYS.join('、')}`);
+      }
+
+      const limitRaw = q.limit;
+      let limit = 10;
+      if (limitRaw != null && limitRaw !== '') {
+        const n = Number(limitRaw);
+        if (!Number.isFinite(n) || n < 1 || n > 50) {
+          return sendError(res, 400, 'BAD_LIMIT', `limit 必須是 1–50 的整數（收到「${limitRaw}」）`,
+            '不帶此參數時預設列出前 10 大權重股');
+        }
+        limit = Math.floor(n);
+      }
+
+      let h;
+      try {
+        h = await sectorHoldings.getHoldings(sectorKey, {
+          limit,
+          refresh: q.refresh === '1',
+        });
+      } catch (e) {
+        // 版塊代碼錯 → 400（使用者可修正）；上游抓不到 → 503（稍後再試）
+        const status = e.code === 'BAD_SECTOR' ? 400 : 503;
+        return sendError(res, status, e.code || 'HOLDINGS_FAILED', e.message, e.hint);
+      }
+
+      const tickers = h.holdings.map((x) => x.ticker);
+      const ret = await sectorHoldings.getReturns(datasource, tickers);
+
+      const sectorMeta = rrg.SECTORS.find((s) => s.key === sectorKey) || { key: sectorKey };
+
+      const rows = h.holdings.map((x) => {
+        const d = ret.byTicker[x.ticker];
+        const failed = ret.failures.find((f) => f.ticker === x.ticker);
+        return {
+          ticker: x.ticker,
+          name: x.name,
+          weight: x.weight,
+          /* 行情代碼可能與顯示代碼不同（BRK.B → BRK-B）。
+             前端跳轉分析頁要用能查得到資料的那一個，否則點進去會 404。 */
+          quoteSymbol: d && d.quoteSymbol ? d.quoteSymbol : sectorHoldings.toQuoteSymbol(x.ticker),
+          // 四個區間的報酬（%）。null 代表資料不足或取用失敗，前端顯示「—」
+          returns: d ? {
+            d1: d.returns.d1,
+            w1: d.returns.w1,
+            m1: d.returns.m1,
+            m3: d.returns.m3,
+          } : { d1: null, w1: null, m1: null, m3: null },
+          lastClose: d ? d.lastClose : null,
+          adjUsed: d ? !!d.adjUsed : false,
+          bars: d ? d.bars : 0,
+          // 取用失敗的那幾檔要說清楚原因，不要讓「—」變成無解的謎
+          unavailable: d ? null : (failed ? failed.message : '無資料'),
+        };
+      });
+
+      return sendJSON(res, 200, {
+        ok: true,
+        sector: sectorKey,
+        sectorLabel: sectorMeta.label || sectorKey,
+        sectorShort: sectorMeta.short || sectorKey,
+        sectorColor: sectorMeta.color || null,
+        fundName: h.fundName,
+        asOf: h.asOf,
+        limits: {
+          requested: limit,
+          returned: rows.length,
+          totalInFund: h.total,
+          truncated: !!h.truncated,
+        },
+        periods: sectorHoldings.PERIODS.map((p) => ({
+          key: p.key, label: p.label, tradingDays: p.tradingDays,
+        })),
+        rows,
+        failures: ret.failures,
+        source: h.source,
+        holdingsCached: !!h.cached,
       });
     }
 

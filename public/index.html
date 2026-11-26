@@ -900,6 +900,55 @@
       </p>
     </section>
 
+    <!-- 版塊權重股 -->
+    <section class="card rrg-hold-card">
+      <header class="card-head">
+        <h2>版塊權重股</h2>
+        <div class="rrg-hold-tools">
+          <label class="rrg-hold-pick">
+            <span>版塊</span>
+            <select id="rrgHoldSector" class="rrg-select rrg-select-sm"></select>
+          </label>
+          <label class="rrg-hold-pick">
+            <span>檔數</span>
+            <select id="rrgHoldLimit" class="rrg-select rrg-select-sm">
+              <option value="5">前 5 大</option>
+              <option value="10" selected>前 10 大</option>
+              <option value="15">前 15 大</option>
+              <option value="20">前 20 大</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <p class="rrg-hold-meta" id="rrgHoldMeta">選擇版塊後載入持股。</p>
+
+      <div class="rrg-table-wrap">
+        <table class="rrg-table rrg-hold-table" id="rrgHoldTable">
+          <thead>
+            <tr>
+              <th scope="col">代碼 / 名稱</th>
+              <th scope="col" class="num">權重</th>
+              <th scope="col" class="num">1 日</th>
+              <th scope="col" class="num">1 週</th>
+              <th scope="col" class="num">1 個月</th>
+              <th scope="col" class="num">3 個月</th>
+              <th scope="col">分析</th>
+            </tr>
+          </thead>
+          <tbody id="rrgHoldBody">
+            <tr><td colspan="7" class="rrg-table-empty">載入中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="rrg-foot">
+        <span class="rrg-foot-item"><b>權重</b>取自發行商每日公布持股，非即時。</span>
+        <span class="rrg-foot-item"><b>報酬</b>以復權價計算（已還原除息），期間以交易日計：1 週＝5 日、1 個月＝21 日、3 個月＝63 日。</span>
+        <span class="rrg-foot-item">點任一列或「分析」可跳到該股 AI 分析頁。</span>
+      </p>
+    </section>
+
     <!-- 版塊明細表 -->
     <section class="card rrg-table-card">
       <header class="card-head">

@@ -42,6 +42,13 @@
     pinned: null,       /* 點擊鎖定的 point key */
     loading: false,
     seq: 0,
+    /* 權重股面板。sector 為 null 代表尚未決定（進場時取第一個選定版塊） */
+    holdSector: null,
+    holdLimit: 10,
+    holdData: null,
+    holdLoading: false,
+    holdSeq: 0,
+    holdError: null,
   };
 
   /* ---------------- DOM ---------------- */
@@ -70,6 +77,12 @@
     el.chips = $('rrgSectorChips');
     el.sectorSummary = $('rrgSectorSummary');
     el.refresh = $('rrgRefresh');
+    /* 權重股面板 */
+    el.holdSector = $('rrgHoldSector');
+    el.holdLimit = $('rrgHoldLimit');
+    el.holdBody = $('rrgHoldBody');
+    el.holdMeta = $('rrgHoldMeta');
+    el.holdTable = $('rrgHoldTable');
   }
 
   /* ---------------- 載入 ---------------- */
@@ -105,6 +118,9 @@
       syncMeta(d.meta);
       syncControlsFromResponse(d);
       renderAll();
+      /* 持股面板依賴主資料的版塊清單，必須在主資料回來後才決定要看哪個版塊 */
+      renderHoldSectorSelect();
+      loadHoldings();
       SA.setStatus('已更新 ' + (d.asOf || ''), 'ok');
     }).catch(function (err) {
       if (mySeq !== state.seq) return;
@@ -115,6 +131,15 @@
       var desc = SA.describeError(err);
       showNotice(desc.title + '：' + desc.message + (desc.hint ? '　' + desc.hint : ''), 'error',
                  desc.kind === 'retry' || desc.kind === 'offline');
+      /* 主資料掛了，持股面板也不該留著上一輪的內容假裝正常 */
+      if (el.holdMeta) {
+        el.holdMeta.textContent = '版塊輪動資料載入失敗，持股暫時無法顯示。';
+        el.holdMeta.className = 'rrg-hold-meta err';
+      }
+      if (el.holdBody) {
+        el.holdBody.innerHTML = '<tr><td colspan="7" class="rrg-table-empty">' +
+          '待上方圖表恢復後才會載入持股</td></tr>';
+      }
       SA.setStatus('載入失敗', 'err');
     });
   }
@@ -687,6 +712,243 @@
       bits.map(function (b) { return '<span class="rrg-diag-item">' + SA.esc(b) + '</span>'; }).join('');
   }
 
+  /* ---------------- 版塊權重股 ---------------- */
+
+  /**
+   * 決定持股面板要看哪個版塊。
+   *
+   * 需求是「當前選定或相關版塊」。「當前選定」有兩種可能來源：
+   *   1. 使用者在圖上點選的版塊（state.pinned）
+   *   2. 版塊勾選清單裡的第一個
+   *
+   * 為什麼以 pinned 優先：
+   *   使用者點某一條尾跡，意圖是「我想看這個版塊」，
+   *   此時下方表格卻顯示另一個版塊的持股，會讓人覺得點擊沒反應。
+   */
+  function resolveHoldSector() {
+    if (state.pinned) return state.pinned;
+    if (state.sectors && state.sectors.length) return state.sectors[0];
+    if (state.data && state.data.meta && state.data.meta.sectors) {
+      var def = state.data.meta.sectors[0];
+      if (def) return def.key;
+    }
+    return 'XLK';
+  }
+
+  /** 版塊下拉：讓使用者能直接切換，不必先回圖上點 */
+  function renderHoldSectorSelect() {
+    if (!el.holdSector) return;
+    var sectors = (state.data && state.data.meta && state.data.meta.sectors) || [];
+    if (!sectors.length) return;
+
+    /* 只列出「目前有勾選」的版塊，避免下拉出現圖上根本不存在的選項 */
+    var visible = state.sectors
+      ? sectors.filter(function (s) { return state.sectors.indexOf(s.key) >= 0; })
+      : sectors;
+    if (!visible.length) visible = sectors;
+
+    var cur = state.holdSector || resolveHoldSector();
+    if (!visible.some(function (s) { return s.key === cur; })) cur = visible[0].key;
+
+    el.holdSector.innerHTML = visible.map(function (s) {
+      return '<option value="' + SA.esc(s.key) + '"' + (s.key === cur ? ' selected' : '') + '>' +
+        SA.esc(s.key + '　' + (s.short || s.label)) + '</option>';
+    }).join('');
+    state.holdSector = cur;
+  }
+
+  function holdUrl() {
+    return '/api/rrg/holdings?sector=' + encodeURIComponent(state.holdSector) +
+      '&limit=' + state.holdLimit;
+  }
+
+  /**
+   * 取得權重股與四區間報酬。
+   *
+   * 三種狀態都必須有明確畫面，不能留白：
+   *   - 載入中：表格顯示「載入中…」並保留表頭（使用者才知道在等什麼）
+   *   - 無資料：說明是「這個版塊沒有」還是「這次取不到」，並給重試
+   *   - 有資料：列出持股；個別股票失敗則該列顯示「—」與原因
+   */
+  function loadHoldings() {
+    if (!el.holdBody) return;
+
+    var sector = state.holdSector || resolveHoldSector();
+    state.holdSector = sector;
+    var mySeq = ++state.holdSeq;
+    state.holdLoading = true;
+    state.holdError = null;
+
+    setHoldLoading(sector);
+
+    SA.api(holdUrl()).then(function (d) {
+      if (mySeq !== state.holdSeq) return;   /* 競態保護：快速切換版塊時只留最後一次 */
+      state.holdLoading = false;
+      state.holdData = d;
+      renderHoldings(d);
+    }).catch(function (err) {
+      if (mySeq !== state.holdSeq) return;
+      state.holdLoading = false;
+      state.holdData = null;
+      state.holdError = err;
+      renderHoldError(err);
+    });
+  }
+
+  function setHoldLoading(sector) {
+    if (el.holdMeta) {
+      el.holdMeta.textContent = '正在載入 ' + sector + ' 的持股與報酬…';
+      el.holdMeta.className = 'rrg-hold-meta';
+    }
+    if (el.holdBody) {
+      el.holdBody.innerHTML = '<tr><td colspan="7" class="rrg-table-empty">' +
+        '<span class="rrg-hold-spin" aria-hidden="true"></span>載入中…</td></tr>';
+    }
+  }
+
+  function renderHoldError(err) {
+    var desc = SA.describeError(err);
+    /* 代碼打錯（400）與上游暫時失敗（503）要分開說，否則使用者不知道該改什麼 */
+    var isParam = err && err.status === 400;
+    var msg = isParam
+      ? '這個版塊的持股檔無法取得：' + (err.message || '參數有誤')
+      : desc.title + '：' + desc.message;
+
+    if (el.holdMeta) {
+      el.holdMeta.textContent = msg + (desc.hint ? '　' + desc.hint : '');
+      el.holdMeta.className = 'rrg-hold-meta err';
+    }
+    if (el.holdBody) {
+      el.holdBody.innerHTML = '<tr><td colspan="7" class="rrg-table-empty">' +
+        SA.esc(msg) +
+        '<button type="button" class="rrg-hold-retry" id="rrgHoldRetry">重試</button>' +
+        '</td></tr>';
+      var btn = $('rrgHoldRetry');
+      if (btn) btn.addEventListener('click', function () { loadHoldings(); });
+    }
+  }
+
+  /** 報酬格的呈現：正紅負綠（台／港／陸股慣例）、null 顯示「—」 */
+  function retCell(v) {
+    if (v == null || !isFinite(v)) {
+      return '<td class="num rrg-ret none" title="資料不足或取用失敗">—</td>';
+    }
+    var cls = v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+    return '<td class="num rrg-ret ' + cls + '">' + SA.pct(v, 2) + '</td>';
+  }
+
+  function renderHoldings(d) {
+    if (!el.holdBody) return;
+
+    var rows = (d && d.rows) || [];
+    var total = d && d.limits ? d.limits.totalInFund : rows.length;
+    var asOf = d && d.asOf ? d.asOf : '—';
+
+    if (el.holdMeta) {
+      if (!rows.length) {
+        /* 空資料不是「錯誤」，用中性色而非紅色：
+           這個版塊確實可能沒有股票部位，塗成錯誤色會讓人以為系統壞了。 */
+        el.holdMeta.textContent = '這個版塊的持股檔內沒有可顯示的股票部位。';
+        el.holdMeta.className = 'rrg-hold-meta';
+      } else {
+        el.holdMeta.innerHTML = '<b>' + SA.esc(d.sectorLabel || d.sector) + '</b>　' +
+          SA.esc(d.fundName || '') +
+          '　持股基準日 ' + SA.esc(asOf) +
+          '　（顯示前 ' + rows.length + ' 大，共 ' + total + ' 檔）' +
+          (d.limits && d.limits.truncated ? '' : '　<b>已含全部</b>');
+        el.holdMeta.className = 'rrg-hold-meta';
+      }
+    }
+
+    if (!rows.length) {
+      el.holdBody.innerHTML = '<tr><td colspan="7" class="rrg-table-empty">' +
+        '無持股資料</td></tr>';
+      return;
+    }
+
+    var failedCount = (d.failures || []).length;
+
+    el.holdBody.innerHTML = rows.map(function (r) {
+      var un = r.unavailable;
+      /* 跳轉要用行情代碼（BRK.B 在行情端是 BRK-B），
+         否則點進分析頁會查不到資料。顯示仍用原始代碼（與官方持股一致）。 */
+      var quoteSym = r.quoteSymbol || r.ticker;
+      /* 整列都可點（不只是「分析」連結）：表格列是天然的點擊目標，
+         要求使用者精準點到 24px 的文字連結在手機上很難操作。
+         但「分析」仍是明確的 <a>，讓鍵盤與右鍵開新分頁可用。 */
+      var href = '#/detail/' + encodeURIComponent(quoteSym);
+      var notClickable = !!un;
+      return '<tr class="rrg-hold-row' + (notClickable ? ' no-data' : '') + '"' +
+        (notClickable ? '' : ' data-symbol="' + SA.esc(quoteSym) + '" tabindex="0" role="link"') +
+        ' aria-label="' + SA.esc(r.ticker + ' ' + r.name + '，前往 AI 分析') + '">' +
+        '<td class="rrg-hold-name">' +
+          '<span class="rrg-hold-tick">' + SA.esc(r.ticker) + '</span>' +
+          '<span class="rrg-hold-co">' + SA.esc(r.name) + '</span>' +
+        '</td>' +
+        '<td class="num rrg-hold-w">' + (r.weight == null ? '—' : r.weight.toFixed(2) + '%') + '</td>' +
+        retCell(r.returns.d1) +
+        retCell(r.returns.w1) +
+        retCell(r.returns.m1) +
+        retCell(r.returns.m3) +
+        '<td>' + (notClickable
+          ? '<span class="rrg-hold-un" title="' + SA.esc(un) + '">無資料</span>'
+          : '<a class="rrg-hold-go" href="' + href + '">分析</a>') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    /* 個別失敗只在「部分成功」時提示；全數失敗已在 meta 說明 */
+    if (failedCount && failedCount < rows.length && el.holdMeta) {
+      el.holdMeta.innerHTML += '<span class="rrg-hold-warn">　' +
+        failedCount + ' 檔暫時取不到報酬（顯示「—」）</span>';
+    }
+  }
+
+  /**
+   * 點列 → 跳到該股 AI 分析頁。
+   *
+   * 為什麼用 SA.navigate 而不是直接改 location.hash：
+   *   走既有路由才會觸發 dispatch → onDetail → 自動查詢與麵包屑，
+   *   直接改 hash 在某些情況下（同一個 hash）不會觸發 hashchange。
+   */
+  function goAnalyze(ticker) {
+    if (!ticker) return;
+    SA.navigate('#/detail/' + encodeURIComponent(ticker));
+  }
+
+  function bindHoldings() {
+    if (el.holdBody) {
+      el.holdBody.addEventListener('click', function (e) {
+        /* 「分析」是真正的 <a>，交給瀏覽器處理（支援右鍵／新分頁） */
+        if (e.target.closest && e.target.closest('a.rrg-hold-go')) return;
+        var tr = e.target.closest ? e.target.closest('tr[data-symbol]') : null;
+        if (!tr) return;
+        goAnalyze(tr.getAttribute('data-symbol'));
+      });
+
+      /* 鍵盤：Enter / Space 也能跳轉（列有 tabindex 才能被 Tab 到） */
+      el.holdBody.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var tr = e.target.closest ? e.target.closest('tr[data-symbol]') : null;
+        if (!tr) return;
+        e.preventDefault();
+        goAnalyze(tr.getAttribute('data-symbol'));
+      });
+    }
+
+    if (el.holdSector) {
+      el.holdSector.addEventListener('change', function () {
+        state.holdSector = el.holdSector.value;
+        loadHoldings();
+      });
+    }
+    if (el.holdLimit) {
+      el.holdLimit.addEventListener('change', function () {
+        state.holdLimit = Number(el.holdLimit.value) || 10;
+        loadHoldings();
+      });
+    }
+  }
+
   /* ---------------- 事件綁定 ---------------- */
   var trailTimer = null, periodTimer = null;
 
@@ -758,6 +1020,13 @@
         state.hover = state.pinned;
         drawChart();
         if (!state.pinned && el.tip) el.tip.hidden = true;
+        /* 點版塊 = 指定下方權重股要看哪一個。
+           這是「當前選定版塊」最直觀的實作：點誰就看誰的成分股。 */
+        if (state.pinned && state.pinned !== state.holdSector) {
+          state.holdSector = state.pinned;
+          renderHoldSectorSelect();
+          loadHoldings();
+        }
       });
     }
     if (el.refresh) {
@@ -780,6 +1049,7 @@
     started = true;
     if (!el.canvas) cacheEl();
     bindControls();
+    bindHoldings();
     bindHover();
     /* 先畫空白座標，載入時畫面不會是一片白 */
     drawChart();

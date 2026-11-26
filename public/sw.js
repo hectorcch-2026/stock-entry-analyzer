@@ -30,7 +30,9 @@
 //         行動端固定資訊列。index.html / app.js / styles.css 全改，必須升版。
 // v1.0.5：新增 RRG 版塊輪動頁（index.html / common.js / styles.css /
 //         新增 rrg-client.js 四者皆變動），必須升版否則舊用戶拿到舊殼。
-const VERSION = 'v1.0.5';
+// v1.0.6：RRG 新增版塊權重股面板（index.html / styles.css / rrg-client.js
+//         皆變動，且新增 /api/rrg/holdings 端點），必須再升版。
+const VERSION = 'v1.0.6';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
