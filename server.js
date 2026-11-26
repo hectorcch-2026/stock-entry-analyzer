@@ -1136,15 +1136,87 @@ const server = http.createServer(async (req, res) => {
     /* 暫時的診斷端點：確認雲端取不到市值時卡在哪一步。
        驗證完立刻移除。 */
     if (pathname === '/api/rrg/treemap/_diag' && req.method === 'GET') {
-      let session = null;
-      try { session = await treemapService.getCapSession(); } catch (e) { /* 見 diag */ }
-      return sendJSON(res, 200, {
-        hasCookie: !!(session && session.cookie),
-        hasCrumb: !!(session && session.crumb),
-        diag: treemapService.getCapDiag(),
-        node: process.version,
-        ua: req.headers['user-agent'] || null,
+      const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+      const out = { node: process.version, tests: {} };
+
+      const timed = async (fn) => {
+        const t0 = Date.now();
+        try { const v = await fn(); return { ms: Date.now() - t0, ...v }; }
+        catch (e) { return { ms: Date.now() - t0, error: e.name + ': ' + e.message }; }
+      };
+
+      // 1) 取 cookie
+      let cookie = '';
+      out.tests.cookie = await timed(async () => {
+        const r = await fetch('https://fc.yahoo.com/', {
+          headers: { 'User-Agent': UA }, redirect: 'manual', signal: AbortSignal.timeout(6000),
+        });
+        const list = typeof r.headers.getSetCookie === 'function'
+          ? r.headers.getSetCookie() : [r.headers.get('set-cookie')].filter(Boolean);
+        cookie = list.map((c) => String(c).split(';')[0]).join('; ');
+        return { status: r.status, n: list.length, len: cookie.length };
       });
+
+      // 2) crumb 連打 4 次（看 429 是持續還是瞬時）
+      out.tests.crumbRetries = await timed(async () => {
+        const rs = [];
+        for (let i = 0; i < 4; i++) {
+          const host = i % 2 === 0 ? 'query1' : 'query2';
+          const r = await fetch(`https://${host}.finance.yahoo.com/v1/test/getcrumb`, {
+            headers: { 'User-Agent': UA, Cookie: cookie, Accept: '*/*' },
+            signal: AbortSignal.timeout(6000),
+          });
+          const t = (await r.text()).trim();
+          rs.push({ host, status: r.status, ok: /^[\w.\-]{4,24}$/.test(t), head: t.slice(0, 20) });
+          if (rs[rs.length - 1].ok) break;
+          await new Promise((s) => setTimeout(s, 400));
+        }
+        return { attempts: rs };
+      });
+
+      const crumbTry = out.tests.crumbRetries.attempts || [];
+      const crumb = crumbTry.find((x) => x.ok) ? 'GOT' : '';
+
+      // 3) 無 crumb 直接打 v7/quote
+      out.tests.quoteNoCrumb = await timed(async () => {
+        const r = await fetch('https://query1.finance.yahoo.com/v7/finance/quote?symbols=AAPL', {
+          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
+          signal: AbortSignal.timeout(6000),
+        });
+        const t = await r.text();
+        return { status: r.status, len: t.length, head: t.slice(0, 160) };
+      });
+
+      // 4) v10 quoteSummary 的 price 模組（另一個可能來源）
+      out.tests.quoteSummary = await timed(async () => {
+        const r = await fetch('https://query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL?modules=price', {
+          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
+          signal: AbortSignal.timeout(6000),
+        });
+        const t = await r.text();
+        let cap = null;
+        try { cap = JSON.parse(t)?.quoteSummary?.result?.[0]?.price?.marketCap?.raw ?? null; } catch {}
+        return { status: r.status, len: t.length, cap, head: t.slice(0, 120) };
+      });
+
+      // 5) v8/chart 的 meta 是否有 marketCap（已知沒有，但要確認可用欄位）
+      out.tests.chartMeta = await timed(async () => {
+        const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1d', {
+          headers: { 'User-Agent': UA, Cookie: cookie, Accept: 'application/json' },
+          signal: AbortSignal.timeout(6000),
+        });
+        const j = await r.json();
+        const meta = j?.chart?.result?.[0]?.meta || {};
+        return { status: r.status, keys: Object.keys(meta).join(','), marketCap: meta.marketCap ?? null };
+      });
+
+      // 6) 帶 crumb 打 v7/quote（若上面拿到了）
+      out.tests.quoteWithCrumb = { skipped: !crumb };
+
+      out.tests.sessionState = { hasCookie: !!cookie, crumb };
+      out.tests.serviceDiag = treemapService.getCapDiag();
+      return sendJSON(res, 200, out);
     }
 
     if (pathname === '/api/rrg/treemap' && req.method === 'GET') {
