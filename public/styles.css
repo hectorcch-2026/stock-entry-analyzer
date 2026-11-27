@@ -31,7 +31,17 @@
 
   --text: #101828;
   --text-2: #475467;
-  --text-3: #8a94a6;
+
+  /* --text-3 原本是 #8a94a6，對白底只有 3.06:1、對頁面底色 #f4f6fa 只有 2.83:1，
+     低於 WCAG AA 對一般文字的 4.5:1。它被用在 183 處，其中大量是 11–12.5px
+     的說明文字（財報單位、日期、來源、圖例、注意事項），
+     結果就是「字很小又很淡」——使用者回報的「字體太細」主要指這個。
+
+     改為 #5f6b7d（白底 5.40:1、頁面底色 4.99:1），過 AA 且留餘量。
+     不改動色相，只加深明度，維持原本的視覺層級（仍明顯淺於 --text-2）。
+     註：此值同時用於 7 處非文字用途（小圓點、虛線、長條填色），
+     加深後這些裝飾元素會稍微更明顯，屬於可接受且無害的變化。 */
+  --text-3: #5f6b7d;
 
   --brand: #1d4ed8;
   --brand-soft: #eff4ff;
@@ -352,12 +362,28 @@ body {
 .tab-panel > .grid-2:first-child > .card:first-child { margin-top: 14px; }
 
 @media (max-width: 640px) {
-  .sub-tabs { gap: 6px; padding: 3px; }
-  /* 高度要撐到 44px（Apple HIG 的觸控下限）：
-     只留主標時 padding 會讓按鈕掉到 38px，實測手指不好點。 */
-  .sub-tab { min-width: 92px; padding: 12px 12px; min-height: 44px; justify-content: center; }
+  /* 手機版分頁：4 格必須「一次看全」，不靠橫滑。
+     原本 min-width:92px × 4 + gap 6×3 + padding 3×2 = 392px，
+     而 390px 螢幕的可用寬只有 364px → 第 4 格「新聞」右緣落在 402px，
+     一半在畫面外。使用者要判斷 AI 多空就必須先橫滑，實際等於「找不到」。 */
+  .sub-tabs {
+    gap: 4px; padding: 4px;
+    /* 保留橫滑能力以支援 320px 等極窄機，但正常手機不應觸發 */
+    overflow-x: auto;
+  }
+  .sub-tab {
+    /* flex:1 1 0 + min-width:0 讓 4 格均分剩餘寬度，永不溢出。
+       min-width 若留 92px，總寬必然超過 390px 的可用寬。 */
+    flex: 1 1 0; min-width: 0; max-width: none;
+    padding: 10px 6px; min-height: 48px; justify-content: center;
+    /* 文字不換行才不會把 48px 高撐成兩行，但「基本面」三字在 15px 下約 45px，
+       分到 84px 的格子內仍放得下（含 6px×2 內距）。 */
+    white-space: nowrap;
+  }
   .sub-tab-s { display: none; }   /* 窄螢幕只留主標，避免擠壓 */
-  .sub-tab-t { font-size: 14px; }
+  /* 15px/700：原本 14px/600 在手機上偏小偏細，是最常被抱怨的一處。
+     分頁標籤是整頁導覽，必須一眼可辨，不能比內文小。 */
+  .sub-tab-t { font-size: 15px; font-weight: 700; letter-spacing: 0; }
 }
 
 /* ---------------- 卡片通用 ---------------- */
@@ -613,7 +639,13 @@ body {
 .fib-bar { position: relative; height: 30px; border-radius: 8px; background: linear-gradient(90deg, var(--down-soft), #fff, var(--up-soft)); border: 1px solid var(--border); margin-bottom: 6px; }
 .fib-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
 .fib-mark.strong { background: var(--brand); width: 2px; }
-.fib-mark-label { position: absolute; top: -1px; font-size: 9.5px; color: var(--text-3); transform: translateX(-50%); white-space: nowrap; }
+/* 斐波那契刻度標籤：原本 9.5px + --text-3，實測對比只有 2.12（遠低於 AA 4.5）。
+   這些標籤間距由百分比決定，7 個刻度擠在約 330px 的條上，
+   放到常規字級（14px）必然互相重疊，因此只小幅提到 11px，
+   主要靠加深顏色（--text-2，7.69:1）改善可讀性。
+   11px 下「23.6%」約 34px 寬，最密的一對（38.2% 與 50.0%）間距約 39px，
+   仍不重疊。 */
+.fib-mark-label { position: absolute; top: -1px; font-size: 11px; color: var(--text-2); transform: translateX(-50%); white-space: nowrap; }
 .fib-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-top: 14px; }
 .fib-item { font-size: 12.5px; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; border: 1px solid var(--border); }
 .fib-item .fl { color: var(--text-3); font-size: 11.5px; }
@@ -3660,4 +3692,248 @@ div.fomc-next {
   .news-ai-vp-meta { margin-left: 0; width: 100%; }
   .news-ai-report { padding: 12px; }
   .news-ai-rep-src { padding-left: 16px; }
+}
+
+/* ===================================================
+   手機版字級下限（僅行動裝置）
+   ===================================================
+   問題：桌面版有 282 處 <=12.5px 的字級宣告，是為了在寬螢幕塞下
+   密集的表格、圖例與資料標籤。同一套字級拿到手機上，配上較短的
+   觀看距離與單欄版面，就變成「字太細、看不清楚」——這是實機回報的
+   主要問題，不是個別元件的失誤。
+
+   為什麼集中在檔案末尾覆寫，而不去改那 282 處宣告：
+     1. 桌面版沒有這個問題，逐一改會把原本合適的桌面密度一起放大；
+     2. 集中一處才看得出「手機版的最小字是多少」，日後新增元件不會
+        又冒出一個 9.5px 突破下限；
+     3. 只覆寫 font-size，不動其他屬性，回歸風險可控。
+
+   為什麼放在檔案末尾：本檔後半有大量元件的 @media (max-width:720px)
+   區塊，若把覆寫寫在前面，同特異性下會被後面的規則蓋掉
+   （CSS 同特異性取後者）。放末尾 + 加 .tab-panel/.wrap 前綴提升特異性，
+   兩層保險。
+
+   排除項：position:absolute 的圖表標籤（.marker-label、.fib-mark-label、
+   .zone-visual .marker 等）。它們的座標由 Canvas 繪製邏輯計算，
+   放大字級會讓標籤在圖表上互相重疊；圖表內文字另由 Canvas 控制。
+   =================================================== */
+@media (max-width: 640px) {
+  /* 第一階：原本 12–12.5px、屬「要讀的句子」→ 14px。
+     這些是理解內容的關鍵（AI 觀點、解讀、注意事項），
+     值得給到接近 body 的字級。 */
+  .tab-panel .news-ai-vp-mech,
+  .tab-panel .news-ai-vp-caveat,
+  .tab-panel .news-ai-vp-quote,
+  .tab-panel .news-ai-rep-vp-mech,
+  .tab-panel .news-ai-rep-vp-ev,
+  .tab-panel .news-ai-rep-vp-caveat,
+  .tab-panel .news-ai-item-desc,
+  .tab-panel .news-ai-item-also,
+  .tab-panel .news-ai-topic-kws,
+  .tab-panel .news-ai-topic-name,
+  .tab-panel .news-ai-sec,
+  .tab-panel .news-ai-note,
+  .tab-panel .news-ai-drv-name,
+  .tab-panel .news-ai-drv-title,
+  .tab-panel .news-ai-h3-hint,
+  .tab-panel .news-ai-focus-h,
+  .tab-panel .news-ai-rep-h,
+  .tab-panel .sides-link,
+  .tab-panel .adv-sig-detail,
+  .tab-panel .adv-sig-state,
+  .tab-panel .adv-bsub,
+  .tab-panel .adv-msub,
+  .tab-panel .adv-plat,
+  .tab-panel .adv-proxy,
+  .tab-panel .adv-lead,
+  .tab-panel .adv-points,
+  .tab-panel .adv-na-reason,
+  .tab-panel .cc-note,
+  .tab-panel .cp-sub,
+  .tab-panel .cp-txt,
+  .tab-panel .cp-warn,
+  .tab-panel .pred-note,
+  .tab-panel .pred-delta,
+  .tab-panel .stock-fin-note,
+  .tab-panel .stock-fin-meta-item,
+  .tab-panel .chart-help,
+  .tab-panel .zone-hint,
+  .tab-panel .mt-src,
+  .tab-panel .mt-why,
+  .tab-panel .fl {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* 第二階：原本 11–12px 的標籤與資料（媒體名、時間、分類、
+     依據索引、圖例、表頭等）→ 13px。
+     這是手機版的最小字，仍高於 WCAG 建議的行動閱讀下限。 */
+  .tab-panel .badge,
+  .tab-panel .tier-badge,
+  .tab-panel .src-badge,
+  .tab-panel .fin-chip,
+  .tab-panel .news-ai-badge,
+  .tab-panel .news-ai-tag,
+  .tab-panel .news-ai-item-meta,
+  .tab-panel .news-ai-item-pub,
+  .tab-panel .news-ai-item-time,
+  .tab-panel .news-ai-kw,
+  .tab-panel .news-ai-kw-cat,
+  .tab-panel .news-ai-vp-dir,
+  .tab-panel .news-ai-vp-meta,
+  .tab-panel .news-ai-vp-kw,
+  .tab-panel .news-ai-vp-tag,
+  .tab-panel .news-ai-vp-ev-title,
+  .tab-panel .news-ai-vp-ev-src,
+  .tab-panel .news-ai-vp-dissent,
+  .tab-panel .news-ai-ev,
+  .tab-panel .news-ai-ev-hz,
+  .tab-panel .news-ai-impact-mag,
+  .tab-panel .news-ai-impact-dir,
+  .tab-panel .news-ai-impact-priced,
+  .tab-panel .news-ai-rep-kw-meta,
+  .tab-panel .news-ai-rep-vp-dir,
+  .tab-panel .news-ai-rep-vp-idx,
+  .tab-panel .news-ai-rep-src-meta,
+  .tab-panel .news-ai-rep-num,
+  .tab-panel .news-ai-prov-item,
+  .tab-panel .news-ai-copy-btn,
+  .tab-panel .sides-src-meta,
+  .tab-panel .sides-idx,
+  .tab-panel .sides-count,
+  .tab-panel .sides-src,
+  .tab-panel .sides-dot,
+  .tab-panel .stat,
+  .tab-panel .stat-k,
+  .tab-panel .pct-num,
+  .tab-panel .cc-w,
+  .tab-panel .cc-name,
+  .tab-panel .verdict-pill,
+  .tab-panel .verdict-bar-cap,
+  .tab-panel .bt-cell .bk,
+  .tab-panel .bt-cell .bsub,
+  .tab-panel .bt-cell .bv,
+  .tab-panel .range-cell .rr,
+  /* 子項有獨立宣告（.range-cell .rr span:first-child{12px}），
+     特異性高於單寫父層，必須一併覆寫，否則「高點／低點」仍是 12px。 */
+  .tab-panel .range-cell .rr span:first-child,
+  .tab-panel .role-pill,
+  .tab-panel .levels-table th,
+  .tab-panel .macro-table thead th,
+  .tab-panel .stock-fin-table th,
+  .tab-panel .stock-fin-table td,
+  .tab-panel .stock-fin-sub,
+  .tab-panel .stock-fin-meta,
+  .tab-panel .mt-date,
+  .tab-panel .mt-unit,
+  .tab-panel .mt-def,
+  .tab-panel .sf-field,
+  .tab-panel .sf-check,
+  .tab-panel .chart-legend,
+  .tab-panel .chart-infobar,
+  .tab-panel .zoom-label,
+  .tab-panel .range-btn,
+  .tab-panel .mode-btn,
+  .tab-panel .tab,
+  .tab-panel .cp-h,
+  .tab-panel .icon-btn,
+  .tab-panel .row-btn,
+  .tab-panel .screen-note,
+  .tab-panel .screen-reasons,
+  .tab-panel .adv-pill,
+  .tab-panel .adv-flag,
+  .tab-panel .adv-sk,
+  .tab-panel .rrg-chip,
+  .tab-panel .rrg-chip-k,
+  .tab-panel .rrg-quad,
+  .tab-panel .rrg-leg,
+  .tab-panel .rrg-foot,
+  .tab-panel .rrg-diag,
+  .tab-panel .rf-table th,
+  .tab-panel .rf-q,
+  .tab-panel .rf-px,
+  .tab-panel .rf-meta dt,
+  .tab-panel .rf-meta dd,
+  .tab-panel .rf-src,
+  .tab-panel .rf-formula,
+  .tab-panel .rf-headline,
+  .tab-panel .mc-legend,
+  .tab-panel .mc-sub,
+  .tab-panel .mc-foot,
+  .tab-panel .mc-range,
+  .tab-panel .mc-section-note,
+  .tab-panel .mh-sub,
+  .tab-panel .mh-scope-note,
+  .tab-panel .mh-stamp,
+  .tab-panel .interp-disc,
+  .tab-panel .interp-gaps,
+  .tab-panel .interp-llm-hint,
+  .tab-panel .interp-llm-note,
+  .tab-panel .ics-note {
+    font-size: 13px;
+  }
+
+  /* 第三階：原本 <=10.5px 的微型標籤（分類代碼、量表刻度、
+     表頭單位）→ 12.5px。這些是手機版的絕對下限，不再往下。 */
+  .tab-panel .news-ai-item-kind,
+  .tab-panel .news-ai-gauge-scale,
+  /* 量表中心文字：<span> 無 class，只能靠父層。
+     這裡刻意不用 .gauge-center span{...} 的通配寫法——
+     那會連同 .gauge-center strong（大字）一起命中。 */
+  .tab-panel .gauge-center span,
+  .tab-panel .cred-gauge-center span,
+  .tab-panel .news-ai-gauge-val span,
+  /* 證據索引「#1」是 <a>，沒有 class；父層 .news-ai-vp-ev-idx 才是錨點 */
+  .tab-panel .news-ai-vp-ev-idx a,
+  .tab-panel .news-ai-vp-ev-idx,
+  .tab-panel .news-ai-drv-w,
+  /* 匯報的注意事項是裸 <li>，父層 .news-ai-rep-cav 是唯一錨點 */
+  .tab-panel .news-ai-rep-cav li,
+  .tab-panel .news-ai-rep-cav,
+  .tab-panel .news-ai-kw-cat,
+  .tab-panel .news-ai-vp-ev-src,
+  .tab-panel .news-ai-ev-hz,
+  .tab-panel .macro-ai-chip,
+  .tab-panel .macro-ai-chips,
+  .tab-panel .macro-ai-legend,
+  .tab-panel .macro-ai-rank-no,
+  .tab-panel .macro-ai-cons-note,
+  .tab-panel .cib-tag,
+  .tab-panel .ic-tag,
+  .tab-panel .ice-d,
+  .tab-panel .ice-head,
+  .tab-panel .ice-v,
+  .tab-panel .illm-head,
+  .tab-panel .fi-status,
+  .tab-panel .fi-label,
+  .tab-panel .fi-date,
+  .tab-panel .dict-key,
+  .tab-panel .dict-range,
+  .tab-panel .dict-chip,
+  .tab-panel .fn-label,
+  .tab-panel .rrg-conf,
+  .tab-panel .screen-table thead th,
+  .tab-panel .mt-empty,
+  .tab-panel .mc-empty,
+  .tab-panel .rrg-empty-title,
+  .tab-panel .rrg-notice,
+  .tab-panel .sides-empty,
+  .tab-panel .se-title,
+  .tab-panel .sc-k,
+  .tab-panel .sc-list,
+  .tab-panel .ic-detail,
+  .tab-panel .ic-evidence li,
+  .tab-panel .limit-list,
+  .tab-panel .range-status,
+  .tab-panel .feature p,
+  .tab-panel .feature strong,
+  .tab-panel .dict-intro,
+  .tab-panel .dict-conv,
+  .tab-panel .dict-conv h3,
+  .tab-panel .dict-link,
+  .tab-panel .interp-empty p,
+  .tab-panel .data-footer > div,
+  .tab-panel .disclaimer {
+    font-size: 12.5px;
+  }
 }

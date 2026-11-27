@@ -970,6 +970,239 @@ await check('J4 淺色主題：卡片底淺、文字深', async () => {
 
 /* ------------------------------------------------------------ */
 
+section('K 行動版可讀性（字級下限／分頁可達性）');
+
+/* 實機回報：「手機版的 AI 個股分析分頁字體太細，無法正常運行」。
+   拆開來看其實是兩個獨立缺陷，且都只有真的量像素才會發現：
+
+   1. 分頁列在 390px 下溢出：min-width:92px × 4 + gap + padding = 392px，
+      可用寬只有 364px，第 4 格「新聞」（AI 多空所在）有一半在畫面外，
+      不橫滑就看不到。DOM 存在、click 也能用，但使用者找不到。
+   2. 小字級沿用桌面值：282 處 <=12.5px，配上 --text-3 (#8a94a6)
+      對白底只有 3.06:1（低於 AA 4.5），於是「又小又淡」。
+
+   這兩個問題的共通點：**沒有任何既有測試會失敗**。
+   H1 只驗溢出與裁切，分頁本身不溢出；字級與對比完全沒驗。
+   所以這一節直接量 computed style 與實際對比度。 */
+
+await check('K1 390px 分頁四格全在畫面內、不需橫滑', async () => {
+  const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await m.waitForTimeout(6000);
+
+    const r = await m.evaluate(() => {
+      const bar = document.querySelector('.sub-tabs');
+      if (!bar) return { missing: true };
+      const btns = Array.from(bar.querySelectorAll('.sub-tab'));
+      return {
+        // 溢出判準：分頁列自身是否還需要橫向捲動
+        needScroll: bar.scrollWidth > bar.clientWidth + 1,
+        scrollW: bar.scrollWidth,
+        clientW: bar.clientWidth,
+        // 每一格是否完整落在視窗內（右緣不得超出）
+        vw: document.documentElement.clientWidth,
+        tabs: btns.map((b) => {
+          const rect = b.getBoundingClientRect();
+          const t = b.querySelector('.sub-tab-t');
+          const cs = t ? getComputedStyle(t) : null;
+          return {
+            name: b.getAttribute('data-tab'),
+            right: Math.round(rect.right),
+            left: Math.round(rect.left),
+            h: Math.round(rect.height),
+            fs: cs ? parseFloat(cs.fontSize) : null,
+            fw: cs ? cs.fontWeight : null,
+          };
+        }),
+      };
+    });
+
+    ok(!r.missing, '找不到分頁列');
+    ok(!r.needScroll,
+      `分頁列仍需橫滑（scrollWidth ${r.scrollW} > clientWidth ${r.clientW}）——` +
+      '最後一格會落在畫面外，使用者找不到 AI 多空分頁');
+    for (const t of r.tabs) {
+      ok(t.right <= r.vw, `分頁「${t.name}」右緣 ${t.right}px 超出視窗 ${r.vw}px`);
+      ok(t.left >= 0, `分頁「${t.name}」左緣 ${t.left}px 為負（被推出畫面）`);
+      // 觸控目標下限（Apple HIG 44px）
+      ok(t.h >= 44, `分頁「${t.name}」高度只有 ${t.h}px（觸控下限 44px）`);
+      // 標籤字級不可小於內文；15px/700 是本專案手機版分頁的標準
+      ok(t.fs >= 15, `分頁「${t.name}」字級 ${t.fs}px 偏小（應 >= 15px）`);
+      ok(Number(t.fw) >= 700, `分頁「${t.name}」字重 ${t.fw} 偏細（應 >= 700）`);
+    }
+  } finally {
+    await m.close();
+  }
+});
+
+await check('K2 四個分頁的內容皆無小於 12.5px 的可見文字', async () => {
+  const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await m.waitForTimeout(7000);
+
+    for (const tab of ['decision', 'tech', 'fund', 'news']) {
+      const btn = await m.$('.sub-tab[data-tab="' + tab + '"]');
+      if (!btn) { ok(false, `找不到分頁 ${tab}`); continue; }
+      await btn.click();
+      await m.waitForTimeout(900);
+
+      const small = await m.evaluate((t) => {
+        const panel = document.getElementById('panel-' + t);
+        if (!panel || panel.hidden) return [{ text: '(面板未顯示)', fs: 0 }];
+        const out = [];
+        panel.querySelectorAll('*').forEach((el) => {
+          const direct = Array.from(el.childNodes)
+            .filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join('');
+          if (direct.length < 2) return;
+          const rect = el.getBoundingClientRect();
+          if (!rect.width || !rect.height) return;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || cs.display === 'none') return;
+          const fs = parseFloat(cs.fontSize);
+          // 12.5px 是手機版下限；absolute 的圖表刻度另外處置（見 K3）
+          if (fs >= 12.5 || cs.position === 'absolute') return;
+          out.push({ fs, text: direct.slice(0, 16), cls: (el.getAttribute('class') || '').slice(0, 28) });
+        });
+        return out;
+      }, tab);
+
+      ok(small.length === 0,
+        `${tab} 分頁仍有 ${small.length} 處小於 12.5px：` +
+        small.slice(0, 4).map((s) => `${s.fs}px「${s.text}」.${s.cls}`).join('、'));
+    }
+  } finally {
+    await m.close();
+  }
+});
+
+await check('K3 手機版文字對比度：不合格者 <= 5%（且不含圖表刻度）', async () => {
+  const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await m.waitForTimeout(7000);
+
+    let total = 0;
+    const bad = [];
+    for (const tab of ['decision', 'tech', 'fund', 'news']) {
+      const btn = await m.$('.sub-tab[data-tab="' + tab + '"]');
+      if (!btn) continue;
+      await btn.click();
+      await m.waitForTimeout(900);
+
+      const r = await m.evaluate((t) => {
+        const parse = (c) => {
+          const mm = c.match(/[\d.]+/g);
+          if (!mm) return null;
+          return [Number(mm[0]), Number(mm[1]), Number(mm[2]), mm[3] === undefined ? 1 : Number(mm[3])];
+        };
+        const lum = (rgb) => {
+          const c2 = rgb.slice(0, 3).map((v) => {
+            const x = v / 255;
+            return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+          });
+          return 0.2126 * c2[0] + 0.7152 * c2[1] + 0.0722 * c2[2];
+        };
+        // 往上合成實際背景色（卡片、面板、soft 底色都要算進去）
+        const bgOf = (el) => {
+          const chain = [];
+          let p = el;
+          while (p) { chain.push(p); p = p.parentElement; }
+          let acc = [255, 255, 255, 1];
+          for (let i = chain.length - 1; i >= 0; i--) {
+            const c2 = parse(getComputedStyle(chain[i]).backgroundColor);
+            if (c2 && c2[3] > 0) {
+              acc = [
+                c2[0] * c2[3] + acc[0] * (1 - c2[3]),
+                c2[1] * c2[3] + acc[1] * (1 - c2[3]),
+                c2[2] * c2[3] + acc[2] * (1 - c2[3]),
+                1,
+              ];
+            }
+          }
+          return acc;
+        };
+        const panel = document.getElementById('panel-' + t);
+        if (!panel || panel.hidden) return { n: 0, bad: [] };
+        let n = 0;
+        const bad = [];
+        panel.querySelectorAll('*').forEach((el) => {
+          const direct = Array.from(el.childNodes)
+            .filter((x) => x.nodeType === 3).map((x) => x.textContent.trim()).join('');
+          if (direct.length < 2) return;
+          const rect = el.getBoundingClientRect();
+          if (!rect.width || !rect.height) return;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || cs.display === 'none') return;
+          const fg = parse(cs.color);
+          if (!fg) return;
+          n++;
+          // 圖表上的絕對定位刻度空間受限，不以 AA 標準要求（見 K4）
+          if (cs.position === 'absolute') return;
+          // 紅漲綠跌等語意色另有規範，不在此判定
+          if (/v-neg|v-pos|\.neg|\.pos|adv-bad|adv-on/.test(el.className || '')) return;
+          const lf = lum(fg);
+          const lb = lum(bgOf(el));
+          const cr = (Math.max(lf, lb) + 0.05) / (Math.min(lf, lb) + 0.05);
+          if (cr < 4.5) {
+            bad.push({ cr: Math.round(cr * 100) / 100, text: direct.slice(0, 16), cls: (el.className || '').slice(0, 24) });
+          }
+        });
+        return { n, bad };
+      }, tab);
+
+      total += r.n;
+      bad.push(...r.bad.map((x) => ({ ...x, tab })));
+    }
+
+    // 基準：改動前 335/950（35%）不合格。目標 <= 5%。
+    const ratio = total ? bad.length / total : 0;
+    ok(total > 300, `只量到 ${total} 個文字節點，量測可能失效`);
+    ok(ratio <= 0.05,
+      `${bad.length}/${total}（${(ratio * 100).toFixed(1)}%）文字對比度 < 4.5：` +
+      bad.slice(0, 4).map((x) => `${x.cr}:1「${x.text}」.${x.cls}`).join('、'));
+  } finally {
+    await m.close();
+  }
+});
+
+await check('K4 圖表刻度標籤放大後不重疊', async () => {
+  /* 斐波那契刻度原本 9.5px + --text-3（對比 2.12）。
+     這些標籤間距由百分比決定，放大字級有重疊風險，
+     所以不能只驗「有沒有放大」，必須驗「放大後還排得下」。 */
+  const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await m.waitForTimeout(6000);
+    const btn = await m.$('.sub-tab[data-tab="tech"]');
+    if (btn) { await btn.click(); await m.waitForTimeout(1500); }
+
+    const r = await m.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('.fib-mark-label'));
+      if (!labels.length) return { n: 0 };
+      const items = labels.map((l) => {
+        const b = l.getBoundingClientRect();
+        return { t: l.textContent.trim(), x: b.x, right: b.right, fs: parseFloat(getComputedStyle(l).fontSize) };
+      }).sort((a, b) => a.x - b.x);
+      const overlaps = [];
+      for (let i = 1; i < items.length; i++) {
+        if (items[i].x < items[i - 1].right - 0.5) overlaps.push(`${items[i - 1].t}×${items[i].t}`);
+      }
+      return { n: items.length, overlaps, minFs: Math.min.apply(null, items.map((i) => i.fs)) };
+    });
+
+    ok(r.n === 0 || r.overlaps.length === 0,
+      `斐波那契刻度重疊：${(r.overlaps || []).join('、')}`);
+    ok(r.n === 0 || r.minFs >= 11,
+      `刻度字級只有 ${r.minFs}px（原本 9.5px，應 >= 11px）`);
+  } finally {
+    await m.close();
+  }
+});
+
+/* ------------------------------------------------------------ */
+
 console.log(`\n${'='.repeat(50)}`);
 console.log(`結果：${pass} 通過 / ${fail} 失敗`);
 if (fail) {
