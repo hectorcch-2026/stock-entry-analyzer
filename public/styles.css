@@ -303,9 +303,65 @@ body {
 .feature p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
 .disclaimer { font-size: 12px; color: var(--text-3); margin: 0; }
 
+/* ---------------- 個股頁子分頁 ---------------- */
+/* 13 個區塊排成一欄太長，改用子分頁。刻意做成「可橫向滑動」而不是換行：
+   手機上四格擠兩行會讓每個按鈕小到不好點，橫滑反而好用。
+   scrollbar 隱藏但保留原生捲動與鍵盤操作。
+
+   sticky 的 top 必須避開 .topbar（實測 62px、z-index 40）。
+   若寫 top:0，分頁列會滑到頂欄底下被蓋住，使用者看不到自己在哪一頁。
+   z-index 取 30：低於 topbar(40) 與 offline-bar(50)，高於卡片內容。 */
+.sub-tabs {
+  display: flex; gap: 8px; margin-top: 16px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow-x: auto;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  position: sticky; top: 62px; z-index: 30;
+  box-shadow: 0 2px 8px rgba(16, 24, 40, .04);
+}
+.sub-tabs::-webkit-scrollbar { display: none; }
+
+.sub-tab {
+  flex: 1 1 0; min-width: 118px; display: flex; flex-direction: column;
+  align-items: center; gap: 2px; padding: 9px 14px;
+  background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius-sm); cursor: pointer;
+  font-family: inherit; color: var(--text-2);
+  transition: background .15s, color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.sub-tab:hover { background: var(--surface); color: var(--text); }
+.sub-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.sub-tab-t { font-size: 13.5px; font-weight: 600; letter-spacing: .2px; }
+.sub-tab-s { font-size: 11px; color: var(--text-3); letter-spacing: .1px; }
+
+/* 選中狀態：用品牌色底 + 實線邊框，並把副標也提亮，
+   避免只靠顏色深淺判斷（色弱使用者看不出來）。 */
+.sub-tab.is-active {
+  background: var(--surface); border-color: var(--border-strong);
+  color: var(--text); box-shadow: var(--shadow);
+}
+.sub-tab.is-active .sub-tab-t { color: var(--brand); }
+.sub-tab.is-active .sub-tab-s { color: var(--text-2); }
+
+/* 分頁面板：只顯示當前那一個。
+   用 [hidden] 而非 display:none 類別，才能與既有的
+   :where([hidden]){display:none!important} 規則一致。 */
+.tab-panel > .card:first-child,
+.tab-panel > section:first-child,
+.tab-panel > .grid-2:first-child > .card:first-child { margin-top: 14px; }
+
+@media (max-width: 640px) {
+  .sub-tabs { gap: 6px; padding: 3px; }
+  /* 高度要撐到 44px（Apple HIG 的觸控下限）：
+     只留主標時 padding 會讓按鈕掉到 38px，實測手指不好點。 */
+  .sub-tab { min-width: 92px; padding: 12px 12px; min-height: 44px; justify-content: center; }
+  .sub-tab-s { display: none; }   /* 窄螢幕只留主標，避免擠壓 */
+  .sub-tab-t { font-size: 14px; }
+}
+
 /* ---------------- 卡片通用 ---------------- */
-.card {
-  background: var(--surface); border: 1px solid var(--border);
+.card {  background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow);
   margin-top: 14px;
   /* 關鍵：grid / flex 子項預設 min-width:auto，會被內部寬表格（min-width:380px）
@@ -2608,6 +2664,111 @@ div.fomc-next {
 
 .news-ai-block,
 .macro-ai-block { margin-top: 16px; }
+
+/* ---------- ① 市場焦點（放在最上面，先講結論） ---------- */
+.news-ai-focus {
+  background: var(--brand-soft);
+  border: 1px solid #c7d7fd;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.news-ai-focus-h {
+  margin: 0 0 6px; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .8px; color: var(--brand); text-transform: none;
+}
+.news-ai-focus-p {
+  margin: 0; font-size: 14px; line-height: 1.7; color: var(--text);
+  font-weight: 500;
+}
+
+/* ---------- ② 看好／看跌 雙欄 ----------
+   兩欄在桌面並排（左多看、右看跌），窄螢幕疊成上下。
+   用 grid 而非 flex 是為了讓兩欄寬度嚴格相等：
+   若用 flex，某一欄要點較長會把另一欄壓窄，掃讀時會左右跳。 */
+.sides-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  align-items: start;
+}
+.sides-col {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden;
+}
+.sides-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 12px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.sides-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.sides-title { font-size: 12.5px; font-weight: 700; }
+.sides-count {
+  margin-left: auto; font-size: 11px; font-weight: 600;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+}
+
+/* 看好／看跌 用藍／橘，**不用紅綠**：紅綠在本站代表股價漲跌，
+   混用會讓使用者把「新聞看空」誤讀成「股價在跌」。 */
+.sides-bull .sides-dot { background: var(--brand); }
+.sides-bull .sides-title { color: var(--brand); }
+.sides-bear .sides-dot { background: var(--warn); }
+.sides-bear .sides-title { color: var(--warn); }
+
+.sides-list { list-style: none; margin: 0; padding: 6px 0; }
+.sides-item {
+  display: flex; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px dashed var(--border);
+}
+.sides-item:last-child { border-bottom: 0; }
+.sides-idx {
+  flex: 0 0 auto; width: 17px; height: 17px; margin-top: 1px;
+  border-radius: 50%; font-size: 10.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.sides-body { min-width: 0; }
+/* 要點本文：這是使用者掃讀的主體，行高給足、字級略大於輔助文字 */
+.sides-point { margin: 0; font-size: 13px; line-height: 1.62; color: var(--text); }
+/* 財務連結：次級資訊，顏色壓暗、字級縮小，避免與要點搶注意力 */
+.sides-link {
+  margin: 5px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--text-2);
+  padding-left: 8px; border-left: 2px solid var(--border-strong);
+}
+.sides-src {
+  margin: 5px 0 0; font-size: 11px; color: var(--text-3);
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+}
+.sides-src a { color: var(--text-2); text-decoration: none; }
+.sides-src a:hover { color: var(--brand); text-decoration: underline; }
+.sides-empty {
+  padding: 14px 12px; font-size: 12.5px; color: var(--text-3);
+  line-height: 1.6; text-align: center;
+}
+
+/* ---------- ③ 基本面解讀 ---------- */
+.news-ai-fin-read {
+  margin: 0; font-size: 13px; line-height: 1.78; color: var(--text);
+  padding: 11px 13px; background: var(--surface-2);
+  border-radius: var(--radius-sm); border-left: 3px solid var(--brand);
+}
+.news-ai-fin-facts {
+  display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px;
+}
+.fin-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 4px 9px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-2);
+}
+.fin-chip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 體質評級用中性色階，不帶紅綠語義 */
+.fin-chip.lv-high { border-color: #b7e5cf; background: #f2fbf6; }
+.fin-chip.lv-low { border-color: #f2ddb4; background: #fffaf0; }
+
+@media (max-width: 820px) {
+  .sides-grid { grid-template-columns: 1fr; }
+}
 
 /* ---------- 上半部：情緒量表 + 摘要 ---------- */
 .news-ai-top {

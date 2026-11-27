@@ -178,6 +178,76 @@
     var sum = $('newsAiSummary');
     if (sum) sum.textContent = ai.summary || '—';
 
+    /* --- ① 市場焦點 ---
+       focus 來自後端 sides（LLM 或規則層），若缺席就退回 ai.summary，
+       絕不留白：這一句是整張卡最上方的結論，空白等於沒有重點。 */
+    var sides = d.sides || null;
+    var focusEl = $('newsAiFocus');
+    if (focusEl) {
+      var focusText = (sides && sides.focus) || ai.summary || '—';
+      focusEl.textContent = focusText;
+    }
+
+    /* --- ② 看好／看跌 雙欄 --- */
+    if (sides) {
+      renderSidesColumn($('newsAiBullList'), $('newsAiBullCount'), sides.bull, 'bull');
+      renderSidesColumn($('newsAiBearList'), $('newsAiBearCount'), sides.bear, 'bear');
+
+      var sidesHint = $('newsAiSidesHint');
+      if (sidesHint) {
+        var howCn = sides.mode === 'llm'
+          ? '由 AI 逐則閱讀正文後分類'
+          : '由片語方向詞典與正文關鍵句抽取';
+        sidesHint.textContent = howCn
+          + (sides.financialFacts && sides.financialFacts.available ? '，並對照最新財報' : '');
+      }
+    }
+
+    /* --- ③ 結合財務狀況的解讀 --- */
+    var finRead = $('newsAiFinRead');
+    if (finRead) {
+      var readText = (sides && sides.financial && sides.financial.read) || '';
+      finRead.textContent = readText || '目前沒有可用的財報資料，僅就新聞內容判讀。';
+    }
+
+    // 財務事實小卡：只放後端給的數字，前端不自行換算（避免與財報卡不一致）
+    var finFacts = $('newsAiFinFacts');
+    if (finFacts) {
+      var ff = sides && sides.financialFacts;
+      if (ff && ff.available && ff.facts && ff.facts.length) {
+        var heal = {};
+        for (var hi = 0; hi < (ff.health || []).length; hi++) {
+          heal[ff.health[hi].item] = ff.health[hi].level;
+        }
+        var chips = '';
+        for (var fi = 0; fi < ff.facts.length; fi++) {
+          var f = ff.facts[fi];
+          var shown = formatFinValue(f);
+          var lv = heal[f.label];
+          var lvShort = lv ? String(lv).split('（')[0] : '';
+          var cls = 'fin-chip'
+            + (lvShort === '高' ? ' lv-high' : lvShort === '低' ? ' lv-low' : '');
+          chips += '<span class="' + cls + '" title="'
+            + esc((ff.period ? '期間 ' + ff.period + '　' : '')
+              + (ff.asOf ? '截止 ' + ff.asOf : '')) + '">'
+            + esc(f.label) + ' <b>' + esc(shown) + '</b>'
+            + (lvShort ? '·' + esc(lvShort) : '')
+            + '</span>';
+        }
+        finFacts.innerHTML = chips;
+      } else {
+        finFacts.innerHTML = '';
+      }
+    }
+
+    var finHint = $('newsAiFinHint');
+    if (finHint) {
+      var ffh = sides && sides.financialFacts;
+      finHint.textContent = ffh && ffh.available
+        ? (ffh.period ? ffh.period + '　' : '') + (ffh.asOf || '')
+        : '未取得財報資料';
+    }
+
     /* --- 標籤：信心 / 模式 / 版塊 --- */
     var tags = $('newsAiTags');
     if (tags) {
@@ -399,14 +469,118 @@
     var titleHtml = url
       ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(title) + '</a>'
       : esc(title);
-    var desc = it.excerpt
-      ? '<p class="news-ai-item-desc">' + esc(it.excerpt) + '</p>'
+
+    /* 摘要來源優先序（這是「AI 自動打開各條新聞」的呈現端）：
+         ① bodySummary —— 後端真的抓了正文後提煉的摘要
+         ② excerpt     —— RSS 原始摘要（常常只是標題＋媒體名重複）
+       若有正文但沒摘要，至少標出「已讀 N 字」讓使用者知道系統確實讀過，
+       而不是把「沒抓到」和「沒內容」混為一談。 */
+    var descText = it.bodySummary || it.excerpt || '';
+    var descCls = 'news-ai-item-desc' + (it.bodySummary ? ' is-body' : '');
+    var desc = descText
+      ? '<p class="' + descCls + '">' + esc(descText) + '</p>'
       : '';
+
+    // 閱讀狀態：明確區分「已讀正文」「付費牆」「抓不到」
+    var bodyTag = '';
+    if (it.paywalled) {
+      bodyTag = '<span class="news-ai-item-bodytag is-paywall">付費牆，僅能以摘要呈現</span>';
+    } else if (it.bodySummary) {
+      bodyTag = '<span class="news-ai-item-bodytag is-ok">已讀正文 '
+        + (it.bodyChars || 0) + ' 字</span>';
+    } else if (it.bodyChars > 0) {
+      bodyTag = '<span class="news-ai-item-bodytag">正文偏短，摘要有限</span>';
+    }
+
     return '<li class="news-ai-item">'
       + '<div class="news-ai-item-meta">' + meta.join('') + '</div>'
       + '<div class="news-ai-item-title">' + titleHtml + '</div>'
-      + desc + also
+      + desc + bodyTag + also
       + '</li>';
+  }
+
+  /* ---------------- 看好／看跌 雙欄 ---------------- */
+
+  /**
+   * 財務數字的中文顯示。
+   *
+   * 為什麼要自己格式化成「億」：後端營收是 478834000000（美元），
+   * 直接印出來使用者讀不出量級。但**不可改變數值本身**，
+   * 四捨五入的規則要固定，否則每個地方印出來的同一數字會不一樣。
+   */
+  function formatFinValue(f) {
+    if (!f || f.value == null) return '—';
+    var v = f.value;
+    var unit = f.unit || '';
+    if (unit === 'USD') {
+      if (Math.abs(v) >= 1e9) return (v / 1e8).toFixed(2) + ' 億';
+      if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(1) + ' 百萬';
+      return String(v);
+    }
+    if (unit === '%') return v + '%';
+    return String(v) + unit;
+  }
+
+  /**
+   * 單一要點的 HTML。
+   *
+   * 三層資訊的視覺層級必須分明，否則整欄會變成一團文字無法掃讀：
+   *   要點本文（大字、深色）→ 財務連結（小字、左側細線）→ 來源（最小、灰）
+   */
+  function sideItemHtml(it, idx) {
+    var point = it.point || it.title || '';
+    var fin = it.fundamentalLink;
+    var srcBits = [];
+    if (it.publisher) srcBits.push(esc(it.publisher));
+    if (it.ageText) srcBits.push(esc(it.ageText));
+    var srcLink = '';
+    if (it.title) {
+      var label = it.title.length > 46 ? it.title.slice(0, 46) + '…' : it.title;
+      srcLink = it.link
+        ? '<a href="' + esc(it.link) + '" target="_blank" rel="noopener noreferrer" title="'
+          + esc(it.title) + '">' + esc(label) + '</a>'
+        : esc(label);
+    }
+
+    var srcHtml = (srcLink || srcBits.length)
+      ? '<p class="sides-src">'
+        + (srcBits.length ? '<span class="sides-src-meta">' + srcBits.join(' · ') + '</span>' : '')
+        + (srcLink ? (srcBits.length ? ' · ' : '') + srcLink : '')
+        + '</p>'
+      : '';
+
+    return '<li class="sides-item">'
+      + '<span class="sides-idx" aria-hidden="true">' + (idx + 1) + '</span>'
+      + '<div class="sides-body">'
+      + '<p class="sides-point">' + esc(point) + '</p>'
+      + (fin ? '<p class="sides-link">' + esc(fin) + '</p>' : '')
+      + srcHtml
+      + '</div></li>';
+  }
+
+  /**
+   * 渲染一欄。
+   *
+   * 空狀態要說清楚「為什麼沒有」，不能只留一片空白：
+   * 使用者分不清是「真的沒有看空消息」還是「功能壞了」。
+   */
+  function renderSidesColumn(listEl, countEl, items, side) {
+    if (!listEl) return;
+    var arr = items || [];
+    if (countEl) countEl.textContent = String(arr.length);
+
+    if (!arr.length) {
+      listEl.innerHTML = '<li class="sides-empty">'
+        + (side === 'bull'
+          ? '本批新聞沒有明確的正面要點。'
+          : '本批新聞沒有明確的負面要點。')
+        + '<br>系統不強行二分，請對照下方關鍵事件與技術面。</li>';
+      return;
+    }
+
+    var h = '';
+    for (var i = 0; i < arr.length; i++) h += sideItemHtml(arr[i], i);
+    listEl.innerHTML = h;
   }
 
   /** 情緒量表：半圓刻度盤 + 指針 */

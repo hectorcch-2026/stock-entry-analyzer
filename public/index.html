@@ -159,6 +159,13 @@
   <!-- ============ 分析結果 ============ -->
   <div id="result" hidden>
 
+    <!-- ============ 子分頁導覽 ============
+         為什麼要分子分頁：本頁原有 13 個區塊，單欄到底要滾很久，
+         使用者很難快速跳到「我現在想看的那一塊」。分成四頁後，
+         每一頁只講一個層次的問題：要不要買、技術怎麼走、公司體質、消息面。
+         注意 aria：tablist/tab/tabpanel 三角關係缺一不可，
+         否則螢幕閱讀器只會唸出一堆按鈕而不會說「這是第幾個分頁」。 -->
+
     <!-- 報價頭部 -->
     <section class="quote-card" aria-label="即時報價">
       <div class="quote-main">
@@ -197,6 +204,15 @@
       <p id="fuzzyNote" class="fuzzy-note" hidden></p>
     </section>
 
+    <div class="sub-tabs" role="tablist" aria-label="個股分析分頁">
+      <button class="sub-tab is-active" id="tab-decision" role="tab" aria-selected="true" aria-controls="panel-decision" data-tab="decision" type="button"><span class="sub-tab-t">決策</span><span class="sub-tab-s">買入位與機率</span></button>
+      <button class="sub-tab" id="tab-tech" role="tab" aria-selected="false" aria-controls="panel-tech" data-tab="tech" tabindex="-1" type="button"><span class="sub-tab-t">技術</span><span class="sub-tab-s">走勢與關鍵價位</span></button>
+      <button class="sub-tab" id="tab-fund" role="tab" aria-selected="false" aria-controls="panel-fund" data-tab="fund" tabindex="-1" type="button"><span class="sub-tab-t">基本面</span><span class="sub-tab-s">財報體質</span></button>
+      <button class="sub-tab" id="tab-news" role="tab" aria-selected="false" aria-controls="panel-news" data-tab="news" tabindex="-1" type="button"><span class="sub-tab-t">新聞</span><span class="sub-tab-s">AI 解讀與多空</span></button>
+    </div>
+
+    <!-- tabpanel: 決策 -->
+    <div class="tab-panel" id="panel-decision" role="tabpanel" aria-labelledby="tab-decision">
     <!-- 買入區間 + 機率 -->
     <section class="grid-2">
       <article class="card buy-card" aria-label="建議買入區間">
@@ -351,8 +367,11 @@
         <p class="pred-note" id="credDisclaimer"></p>
       </div>
     </section>
+    </div><!-- /tabpanel -->
 
     <!-- 圖表 -->
+    <!-- tabpanel: 技術 -->
+    <div class="tab-panel" id="panel-tech" role="tabpanel" aria-labelledby="tab-tech" hidden>
     <section class="card chart-card" aria-label="價格走勢圖">
       <header class="card-head chart-head">
         <div class="chart-title-row">
@@ -479,8 +498,11 @@
       </p>
       <div id="advModules" class="adv-modules"></div>
     </section>
+    </div><!-- /tabpanel -->
 
     <!-- 個股財報（原在宏觀模塊，已移至個股模塊） -->
+    <!-- tabpanel: 基本面 -->
+    <div class="tab-panel" id="panel-fund" role="tabpanel" aria-labelledby="tab-fund" hidden>
     <section class="card stock-fin-card" id="stockFinCard" aria-label="個股財報">
       <header class="card-head">
         <h2 id="stockFinTitle">個股財報</h2>
@@ -531,8 +553,11 @@
         </p>
       </div>
     </section>
+    </div><!-- /tabpanel -->
 
     <!-- 新聞與 AI 分析 -->
+    <!-- tabpanel: 新聞 -->
+    <div class="tab-panel" id="panel-news" role="tabpanel" aria-labelledby="tab-news" hidden>
     <section class="card news-ai-card" id="newsAiCard" aria-label="新聞與 AI 分析">
       <header class="card-head">
         <h2>新聞與 AI 分析</h2>
@@ -555,6 +580,22 @@
       </div>
 
       <div id="newsAiBody" hidden>
+        <!--
+          資訊分層（依「從上到下、越往下越細」排）：
+            ① 市場焦點一句話   —— 只看這句就知道市場在爭什麼
+            ② 看好／看跌 雙欄   —— 逐條要點，每點連回財務指標與原文
+            ③ 基本面解讀       —— 把上面兩欄接回財報數字
+            ④ 新聞清單         —— 每則的 AI 摘要，可點回原文
+          刻意把「情緒量表」縮到標題列右側：它只是一個概括指標，
+          不該佔掉第一屏的空間（原本它與摘要並排，把焦點擠到下面）。
+        -->
+        <!-- ① 市場焦點 -->
+        <div class="news-ai-focus">
+          <h3 class="news-ai-focus-h">市場最在意</h3>
+          <p class="news-ai-focus-p" id="newsAiFocus">—</p>
+          <div class="news-ai-tags" id="newsAiTags"></div>
+        </div>
+
         <!-- 情緒 + 摘要 -->
         <div class="news-ai-top">
           <div class="news-ai-gauge-box">
@@ -570,8 +611,41 @@
           <div class="news-ai-summary-box">
             <h3 class="news-ai-h3">新聞摘要</h3>
             <p class="news-ai-summary" id="newsAiSummary">—</p>
-            <div class="news-ai-tags" id="newsAiTags"></div>
           </div>
+        </div>
+
+        <!-- ② 看好／看跌 雙欄 -->
+        <div class="news-ai-block">
+          <h3 class="news-ai-h3">看好與看跌
+            <span class="news-ai-h3-hint" id="newsAiSidesHint">依新聞要點分欄，每點標註對應財務指標</span>
+          </h3>
+          <div class="sides-grid" id="newsAiSides">
+            <div class="sides-col sides-bull">
+              <div class="sides-head">
+                <span class="sides-dot" aria-hidden="true"></span>
+                <span class="sides-title">看好</span>
+                <span class="sides-count" id="newsAiBullCount">0</span>
+              </div>
+              <ul class="sides-list" id="newsAiBullList"></ul>
+            </div>
+            <div class="sides-col sides-bear">
+              <div class="sides-head">
+                <span class="sides-dot" aria-hidden="true"></span>
+                <span class="sides-title">看跌</span>
+                <span class="sides-count" id="newsAiBearCount">0</span>
+              </div>
+              <ul class="sides-list" id="newsAiBearList"></ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- ③ 基本面解讀 -->
+        <div class="news-ai-block">
+          <h3 class="news-ai-h3">結合最新財務狀況的解讀
+            <span class="news-ai-h3-hint" id="newsAiFinHint">—</span>
+          </h3>
+          <p class="news-ai-fin-read" id="newsAiFinRead">—</p>
+          <div class="news-ai-fin-facts" id="newsAiFinFacts"></div>
         </div>
 
         <!-- 關鍵事件 -->
@@ -594,9 +668,11 @@
           <div class="news-ai-drivers" id="newsAiDrivers"></div>
         </div>
 
-        <!-- 新聞清單 -->
+        <!-- ④ 新聞清單（每則含 AI 摘要） -->
         <div class="news-ai-block">
-          <h3 class="news-ai-h3">新聞來源 <span class="news-ai-h3-hint" id="newsAiListHint">—</span></h3>
+          <h3 class="news-ai-h3">新聞來源與內容摘要
+            <span class="news-ai-h3-hint" id="newsAiListHint">—</span>
+          </h3>
           <ol class="news-ai-list" id="newsAiList"></ol>
         </div>
 
@@ -620,6 +696,7 @@
       <p class="hint-line" id="notifyStatus">—</p>
       <div id="notifyPreview" class="notify-preview" hidden></div>
     </section>
+    </div><!-- /tabpanel -->
 
     <!-- 頁腳資訊 -->
     <footer class="data-footer">

@@ -9,6 +9,11 @@ await p.goto('http://localhost:5177/?symbol=0700.HK', { waitUntil: 'networkidle'
 await p.waitForSelector('#result:not([hidden])', { timeout: 60000 });
 await p.waitForTimeout(2000);
 
+// 通知卡位在「新聞」子分頁內（個股頁已改為 4 個子分頁）。
+// 面板用 hidden 屬性隱藏，不切分頁會點不到，這也是真實使用者路徑。
+const newsTab = await p.$('#tab-news');
+if (newsTab) { await p.click('#tab-news'); await p.waitForTimeout(300); }
+
 // 點擊 label 切換（模擬真實使用者操作）
 console.log('切換前 checked:', await p.isChecked('#notifyToggle'));
 await p.click('.switch-track');

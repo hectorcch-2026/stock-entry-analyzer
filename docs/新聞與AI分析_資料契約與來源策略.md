@@ -177,8 +177,49 @@ GET /api/stock-news-ai?symbol=AAPL&days=7&limit=8&refresh=1
 | `limit` | 8 | 3–15 | 餵給 AI 的則數 |
 | `mode` | `auto` | `auto`/`rule` | `rule` 強制不使用 LLM（供測試與成本控制） |
 | `refresh` | 0 | 0/1 | 略過內容快取 |
+| `bodies` | 1 | 0/1 | 設 0 可跳過正文抓取（僅回 RSS 摘要），用於除錯 |
+
+#### v1.5 新增回應欄位
+
+```jsonc
+{
+  "news": {
+    "items": [                       // 最多 10 則，已排序、已去重
+      {
+        "title": "…",
+        "bodySummary": "AI 提煉的正文摘要（空字串＝未讀到正文）",
+        "bodyChars": 1400,           // 正文實際字數，前端據此標示「已讀正文」
+        "paywalled": true,           // 付費牆，前端標「付費牆，僅能以摘要呈現」
+        "alsoReportedBy": ["TipRanks", "GuruFocus.com"],  // 同一事件的其他來源
+        "topic": "financial|policy|both|other",
+        "score": 63.2                // 重要性分數（財務／政策詞 + 正文完整度 - 噪音扣分）
+      }
+    ]
+  },
+  "bodies": { "stats": { "considered": 10, "fetched": 10, "bodyOk": 7, "summarized": 5 } },
+  "sides": {                         // 「AI 新聞分析」的看好／看跌雙欄
+    "mode": "llm | rule | none",
+    "focus": "市場對這檔最關注的兩三件事（繁體中文一段）",
+    "bull": [ { "point": "…", "fundamentalLink": "…", "newsIndex": 1,
+                "title": "…", "publisher": "…", "link": "…", "ageText": "2 小時前" } ],
+    "bear": [ /* 同結構 */ ],
+    "bullCount": 5, "bearCount": 4,
+    "sentiment": "positive|negative|neutral|mixed",
+    "financial": { "line": "毛利率 48.79（高）、淨利率 27.6（高）…",
+                   "read": "這些新聞要點對基本面的意義（繁體中文）" },
+    "financialFacts": { "available": true, "period": "FY2026", "facts": […], "health": […] },
+    "caveats": ["…"]
+  }
+}
+```
+
+**`bodySummary` 與 `excerpt` 的差別**：`excerpt` 是 RSS 提要（常與標題重複），
+`bodySummary` 是實際打開文章後從正文挑句提煉的結果。前端必須優先顯示
+`bodySummary`，並用不同的視覺標示「這則是讀過正文的」。`bodySummary` 為空
+有三種合理原因，前端要分別標示：付費牆、正文過短、正文主體不是這家公司。
 
 ---
+
 
 ## 3. 版塊輪動 × 宏觀經濟 AI 分析
 
@@ -390,17 +431,48 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 |---|---|
 | `newsAiCard` | 外層 `<section>` |
 | `newsAiBadge` | 「AI 分析」/「規則分析」/「不可用」 |
+| `newsAiFocus` | **市場最關注什麼**（v1.5 新增，置於卡片最上方） |
 | `newsAiSummary` | 摘要段落 |
 | `newsAiGauge` | 情緒分數視覺（SVG 弧） |
 | `newsAiScore` | 分數數字 |
 | `newsAiSentiment` | 情緒文字 |
-| `newsAiEvents` | 關鍵事件清單 |
-| `newsAiImpact` | 對股價潛在影響 |
-| `newsAiImpactDir` | 方向標籤 |
-| `newsAiDrivers` | 驅動因子權重條 |
-| `newsAiList` | 新聞清單 |
+| `newsAiBullList` / `newsAiBearList` | **看好／看跌雙欄清單**（v1.5 新增） |
+| `newsAiBullCount` / `newsAiBearCount` | 兩欄則數 |
+| `newsAiSidesHint` | 兩欄數量對比的一句判讀 |
+| `newsAiFinRead` | **新聞要點結合財報的解讀**（v1.5 新增） |
+| `newsAiFinFacts` | 財報事實標籤（毛利率／淨利率／ROE／負債比） |
+| `newsAiFinHint` | 財報資料時間與來源 |
+| `newsAiList` | 新聞清單（每則含 AI 提煉的正文摘要） |
 | `newsAiProv` | 來源與時間範圍標註 |
 | `newsAiNote` | 降級／限制說明 |
+
+#### v1.5 個股頁結構：4 個子分頁
+
+個股頁原本是單欄 13 個區塊，v1.5 改為 4 個子分頁，報價卡固定在上方：
+
+| 分頁 | 內容 | 面板 id |
+|---|---|---|
+| 決策 | 買入位與機率、預測卡、可信度卡 | `panel-decision` |
+| 技術 | 走勢圖、關鍵技術位／均線、近期高低點、買入位依據、歷史回測、進階技術分析 | `panel-tech` |
+| 基本面 | 個股財報 | `panel-fund` |
+| 新聞 | AI 解讀新聞、到價通知 | `panel-news` |
+
+**面板必須用 `hidden` 屬性切換，不能只改 class。** 面板內含 Canvas，
+若用 `display:none` 以外的隱藏方式反覆切換，寬度會被算成 0，切回來時圖表空白。
+`tests/news-ai-unit.cjs` 的 K6 與 `scripts/verify-subtabs.mjs` 都鎖住這件事。
+
+#### v1.5 新聞清單品質規則（皆有回歸測試）
+
+| 規則 | 為什麼 | 鎖在哪 |
+|---|---|---|
+| 標題未提到標的者重扣 20 分 | 券商公關稿只在文末提到 Apple，卻因有正文擠進前 10 | L1 |
+| 公司後綴剝除後比對（`Apple Inc.` ↔ `Apple`） | 名稱取到全稱時內文寫簡稱就認不出，等於把所有稿判為無關 | L2 |
+| 13F 持股異動自動稿扣 15 分，但回購／tender offer 反向保護 | 「某投顧增持」對「市場最關注什麼」是純噪音；公司自己回購卻是重大決策 | L3 |
+| 新聞池取 30 則再精選 10 則 | `news-hub` 會先截到 limit，太小的池子讓劣質稿無法被替換 | `server.js` NEWS_POOL |
+| 同一事件靠「共享 2 個以上罕見詞」合併 | 長標題的 Jaccard 只有 0.31–0.50，低於 0.62 門檻，同一天出現三則 | L4 / L5 |
+| 正文完全沒提到標的 → 摘要作廢 | 標題借 Apple 抬 Verizon，摘要會變成 Verizon 的本益比分析 | L6 |
+| 分析師免責聲明列入垃圾句 | Seeking Alpha 正文開頭整段 disclosure，含 AAPL 會通過錨定但零資訊 | L7 |
+| 摘要句不得從半句開始 | 段落拼接導致「ver than 60% of MiniMax's revenue…」這種開頭 | J1 |
 
 輪動頁（`#viewRrg` 內，Treemap 之後、明細表之前）：
 
@@ -439,6 +511,24 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 - [x] 模型講廢話再吐 JSON 時解析成功（容錯解析器）
 - [x] 單一來源失敗不影響整體；全失敗回 200 空結果而非 500
 - [x] 兩區塊皆顯示資料來源與時間範圍
+
+### v1.5 新聞品質與分頁
+
+- [x] `bodies.stats.summarized` ≥ 3（實測 10 則中 5 則成功提煉）
+- [x] 摘要不得從句子中間開始（月份、`a.m./p.m.` 縮寫保護）
+- [x] 公司履歷、版權、訂閱、分析師免責聲明不得進摘要
+- [x] 正文完全沒提到標的 → `bodySummary` 為空字串（不得張冠李戴）
+- [x] 同一事件的多家報導合併為一則，並記錄 `alsoReportedBy`
+- [x] 13F 持股異動自動稿與非本檔公關稿不得進入前 10 名
+- [x] 公司回購／tender offer 不得被誤判為持股異動
+- [x] `sides.bull` / `sides.bear` 每點都有 `fundamentalLink` 或明確為 null
+- [x] 看跌的重點不得只是重述財報卡（`isMetricRestate` 過濾）
+- [x] `mode=rule` 與 `mode=llm` 的 `sides` schema 完全一致（I9 鎖住）
+- [x] 個股頁 4 個子分頁、報價卡固定在上方、sticky 不被頂欄遮住
+- [x] 同一張卡片不得同時出現在兩個分頁（避免重複）
+- [x] 分頁切換後 Canvas 有實際尺寸（`hidden` 屬性切換，非 `display`）
+- [x] 手機版分頁按鈕 ≥40px 且可橫向捲動
+- [x] 分頁選擇記在 `localStorage`，重新載入後回到上次看的分頁
 
 ---
 

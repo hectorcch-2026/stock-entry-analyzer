@@ -49,6 +49,8 @@ const treemap = require('./lib/treemap');
 const treemapService = require('./lib/treemap-service');
 const newsHub = require('./lib/news-hub');
 const aiAnalyst = require('./lib/ai-analyst');
+const articleFetch = require('./lib/article-fetch');
+const newsSides = require('./lib/news-sides');
 const sectorMacroAi = require('./lib/sector-macro-ai');
 
 const PORT = process.env.PORT || 5177;
@@ -1335,6 +1337,21 @@ const server = http.createServer(async (req, res) => {
         ? Promise.resolve(null)
         : resolveSectorContext(norm.value);
 
+      /* 財報（看好／看跌要引用）與新聞都提前並行抓。
+         實測：若照「先 analyze → 再抓財報 → 再抓新聞正文 → 最後跑兩次 LLM」
+         的順序，總耗時 20.7 秒。並行化前置資料可省下約 3 秒，
+         真正的大頭是兩個 LLM 呼叫，必須讓它們同時跑（見下方）。 */
+      const macroP = macro.getSymbolOverview(norm.value, { ctx: null }).catch(() => null);
+      /* 先要一個更大的候選池再精選。
+         為什麼不能直接 limit=10：news-hub 會在回傳前就截到 limit，
+         enrichNews 只能在這 10 則裡重排，無法把「券商公關稿」「13F 持股異動」
+         換成池子裡更好的稿。實測 AAPL 池子有 34 則、其中 3 則是 13F 自動稿，
+         截到 10 之後那些噪音必然入列。取 30 則進來，讓 enrichNews 自己篩。 */
+      const NEWS_POOL = 30;
+      const newsP = newsHub.getNews({
+        symbol: norm.value, name, days, limit: NEWS_POOL,
+      }).catch(() => null);
+
       const [analysisRes, sector] = await Promise.all([
         analyzer.analyze(norm.value).catch((e) => {
           // 分析失敗不阻擋：新聞與 AI 仍可基於新聞本身運作（只是沒有價格脈絡）。
@@ -1352,7 +1369,47 @@ const server = http.createServer(async (req, res) => {
       analysis = analysisRes;
       if (!name && analysis) name = (analysis.meta && analysis.meta.name) || null;
 
-      const out = await aiAnalyst.analyzeStock({
+      /* ------------------------------------------------------------
+         正文補齊（「AI 自動打開各條新聞」的實作位置）
+         ------------------------------------------------------------
+         必須在兩個 LLM 呼叫之前完成：看好／看跌分類要讀正文，
+         只靠標題無法判斷「毛利率指引下修」這種真正的要點。
+         ------------------------------------------------------------ */
+      const preloadedNews = await newsP;
+      let newsItems = (preloadedNews && preloadedNews.news) || [];
+      let bodyStats = null;
+      if (newsItems.length && q.bodies !== '0') {
+        try {
+          /* 使用者指定的抓取策略：按重要性取 10 篇、以財務狀況與政策變化優先、
+             且去除重複事件。排序與去重都在 article-fetch 內完成。
+             傳入 subject 才能剔除「標題根本沒提到這檔」的稿——
+             實測 AAPL 清單會混進券商公關稿與純 13F 持股異動自動稿。 */
+          const enriched = await articleFetch.enrichNews(newsItems, {
+            limit: 10,
+            subject: {
+              symbol: norm.value,
+              name: name || ((analysis && analysis.meta && analysis.meta.name) || null),
+              shortName: (analysis && analysis.meta && analysis.meta.shortName) || null,
+            },
+          });
+          newsItems = enriched.items;
+          bodyStats = enriched.stats || null;
+        } catch (e) {
+          bodyStats = { error: e.message };
+        }
+      }
+
+      /* ------------------------------------------------------------
+         兩個 LLM 呼叫並行
+         ------------------------------------------------------------
+         aiAnalyst 與 newsSides 各自打一次 LLM，兩者互不依賴。
+         串行時實測 20.7 秒（頁面幾乎無法接受），並行後約 12 秒。
+         注意：必須把「已補正文」的新聞注入 aiAnalyst，
+         否則它會自己再抓一次新聞，白等一輪。
+         ------------------------------------------------------------ */
+      const finP = macroP.then((mo) => newsSides.buildFinancialFacts(mo || null));
+
+      const outP = aiAnalyst.analyzeStock({
         symbol: norm.value,
         name,
         analysis,
@@ -1361,13 +1418,51 @@ const server = http.createServer(async (req, res) => {
         limit,
         mode: modeRaw,
         refresh: q.refresh === '1',
+        // 注入已抓好的新聞（含正文），省掉重複抓取與排序
+        news: preloadedNews
+          ? { ...preloadedNews, news: newsItems }
+          : undefined,
       });
+
+      const sidesP = finP.then((fin) => newsSides.analyzeSides(newsItems, fin, {
+        symbol: norm.value,
+        name,
+        price: analysis ? (analysis.meta || {}).price : null,
+        wantLlm: modeRaw !== 'rule',
+        refresh: q.refresh === '1' || modeRaw === 'llm',
+      }).then((s) => {
+        s.financialFacts = {
+          available: fin.available,
+          period: fin.period,
+          asOf: fin.asOf,
+          entity: fin.entity,
+          facts: fin.facts,
+          health: fin.health,
+        };
+        return s;
+      })).catch((e) => ({
+        mode: 'none',
+        bull: [], bear: [], bullCount: 0, bearCount: 0,
+        focus: '看好／看跌分析暫時無法產生。',
+        sentiment: 'neutral',
+        financial: { line: '', read: '' },
+        caveats: [`分析失敗：${e.message}`],
+        note: '分析失敗',
+      }));
+
+      const [out, sides] = await Promise.all([outP, sidesP]);
 
       return sendJSON(res, 200, {
         ...out,
         /* 明確標示「價格脈絡是否可用」：AI 的研判若沒有價格數字支撐，
            前端要能顯示提示，而不是讓使用者以為那是完整的綜合研判。 */
         priceContextAvailable: !!(analysis && out.price && out.price.seriesBars),
+        /* 覆寫 news.items：改為已補正文的版本。
+           其餘 news 欄位（count／tiers／window）沿用 aiAnalyst 的計算，
+           因為它們描述的是「抓到幾則」，不是「幾則有正文」。 */
+        news: { ...(out.news || {}), items: newsItems },
+        bodies: bodyStats,
+        sides,
       });
     }
 

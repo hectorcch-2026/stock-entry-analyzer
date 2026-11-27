@@ -180,8 +180,21 @@ Render 約 1–2 分鐘完成，Railway 約 30–60 秒。
 
 - 網址：https://stock-entry-analyzer.onrender.com
 - 來源：GitHub `hectorcch-2026/stock-entry-analyzer` 分支 `main`，`autoDeploy: true`
-- 目前版本：`b349ea8`（v1.4：更名「股票量化分析專業介面」、個股財報移至個股模塊、新聞 AI 分析、版塊輪動 × 宏觀）
+- 目前版本：見下方「版本記錄」
 - 前端快取版本：Service Worker `v1.0.11`
+
+### 版本記錄
+
+| 版本 | 內容 |
+|---|---|
+| v1.5 | 個股頁改為 4 個子分頁（決策／技術／基本面／新聞）；新聞卡改為「AI 讀正文 + 看好／看跌雙欄 + 財務解讀」；修正新聞清單品質（剔除持股異動自動稿與非本檔公關稿、同一事件多來源合併、正文主體非標的時摘要作廢） |
+| v1.4 | 更名「股票量化分析專業介面」；個股財報移至個股模塊；新增新聞 AI 分析、版塊輪動 × 宏觀 |
+| v1.3 | Treemap 與 RRG 明細 |
+
+> **v1.5 需要環境變數才能使用 LLM 解讀。** 本機的 `config.json`（已 gitignore）
+> 不會上傳；Render 沒有金鑰時會自動落在規則層（`ai.mode === 'rule'`），
+> 功能仍完整但解讀文字較機械。若要在線上啟用 LLM，請在 Render 的
+> Environment 加入 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`。
 
 > 更新程式碼後，Render 約 30 秒～2 分鐘完成部署。可用下列指令確認新版是否已生效
 > （`<title>` 會隨版本改變，比看時間戳可靠）：

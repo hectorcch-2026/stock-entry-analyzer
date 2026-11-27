@@ -235,6 +235,9 @@ for (const [name, w, h, mobile] of [['desktop', 1440, 900, false], ['tablet', 83
   await p.goto(`${BASE}/?symbol=AAPL`, { waitUntil: 'networkidle', timeout: 60000 });
   await p.waitForSelector('#result:not([hidden])', { timeout: 60000 }).catch(() => {});
   await p.waitForTimeout(1500);
+  // 圖表位於「技術」子分頁；不切換的話 hidden 面板內 canvas 量不到墨水。
+  await p.click('#tab-tech').catch(() => {});
+  await p.waitForTimeout(400);
   const m = await p.evaluate(() => ({
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     canvasInk: (() => {

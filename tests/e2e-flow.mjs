@@ -50,6 +50,14 @@ const done = await p.evaluate(() => ({
 console.log('3) 完成狀態:', JSON.stringify(done));
 
 // 圖表 overlay 切換
+/* 圖表與 overlay 切換鈕都在「技術」子分頁內（個股頁已改為 4 個子分頁）。
+   面板用 hidden 屬性隱藏，Playwright 會判定不可見而無法點擊，
+   所以先切到該分頁——這也正是真實使用者的操作路徑。 */
+const goTab = async (name) => {
+  const btn = await p.$('#tab-' + name);
+  if (btn) { await p.click('#tab-' + name); await p.waitForTimeout(300); }
+};
+await goTab('tech');
 const inkOf = () => p.evaluate(() => {
   const cv=document.getElementById('priceChart'); const c=cv.getContext('2d');
   const d=c.getImageData(0,0,cv.width,cv.height).data; let n=0;
@@ -60,6 +68,8 @@ for (const t of ['boll','vol']) { await p.click(`.tab[data-overlay="${t}"]`); aw
 console.log('4b) canvas 墨水 (+boll+vol):', await inkOf(), '| legend:', (await p.textContent('#chartLegend')).slice(0,90));
 
 // 通知
+// 通知卡在「新聞」子分頁內，同樣得先切換分頁才看得到。
+await goTab('news');
 // 注意：notifyToggle 是視覺隱藏的 checkbox（由 label 包覆），
 // 必須點擊 .switch-track 而非 input 本身。
 await p.click('.switch-track');

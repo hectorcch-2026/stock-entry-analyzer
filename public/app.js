@@ -2833,6 +2833,102 @@
   }
 
   /* ==================== 初始化 ==================== */
+  /**
+   * 個股頁子分頁（決策／技術／基本面／新聞）
+   * ------------------------------------------------------------
+   * 為什麼自己做而不是用 <details> 或現成元件：
+   *   本專案零外部依賴，且需要「鍵盤可操作 + 記憶上次選擇」，
+   *   這兩件事用 30 行原生 JS 就能做好。
+   *
+   * ARIA 要點（少一個就會讓螢幕閱讀器失去脈絡）：
+   *   - tablist/tab/tabpanel 三者以 aria-controls / aria-labelledby 互指
+   *   - 未選中的 tab 給 tabindex="-1"，讓 Tab 鍵只在「那一組」停一次
+   *   - 左右方向鍵切換、Home/End 跳首尾
+   */
+  var SUB_TABS = ['decision', 'tech', 'fund', 'news'];
+  var SUB_TAB_KEY = 'sa.detailTab';
+
+  function readSavedTab() {
+    try {
+      var v = window.localStorage.getItem(SUB_TAB_KEY);
+      return SUB_TABS.indexOf(v) >= 0 ? v : null;
+    } catch (e) {
+      // localStorage 可能被隱私模式或政策擋掉；拿不到就用預設值，不得因此報錯
+      return null;
+    }
+  }
+
+  function saveTab(name) {
+    try { window.localStorage.setItem(SUB_TAB_KEY, name); } catch (e) { /* 忽略 */ }
+  }
+
+  function activateTab(name, opts) {
+    var o = opts || {};
+    var target = SUB_TABS.indexOf(name) >= 0 ? name : 'decision';
+
+    var i;
+    for (i = 0; i < SUB_TABS.length; i++) {
+      var key = SUB_TABS[i];
+      var btn = $('tab-' + key);
+      var panel = $('panel-' + key);
+      var on = key === target;
+      if (btn) {
+        btn.classList.toggle('is-active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        // 只有選中的分頁可以用 Tab 鍵聚焦，其餘靠方向鍵
+        btn.setAttribute('tabindex', on ? '0' : '-1');
+      }
+      // 注意：這裡一定要用 hidden 屬性，不能只切 class。
+      // 面板內有 chart，若只設 display:none，Canvas 尺寸會算成 0，
+      // 切回來時圖表會空白（既有 chart 重繪邏輯依賴可見寬度）。
+      if (panel) panel.hidden = !on;
+    }
+
+    if (!o.silent) saveTab(target);
+
+    /* 技術頁藏了 Canvas 圖表。它若在隱藏狀態被繪製，寬高會是 0，
+       切回來必須重畫一次。同理，新聞頁的雙欄高度也依賴實際版面。 */
+    if (target === 'tech' && state.data && typeof drawChart === 'function') {
+      // 等瀏覽器完成 layout 再畫，否則量到的寬度仍是 0
+      requestAnimationFrame(function () { drawChart(); });
+    }
+    return target;
+  }
+
+  function initSubTabs() {
+    var bar = document.querySelector('.sub-tabs');
+    if (!bar) return;
+
+    bar.addEventListener('click', function (ev) {
+      var btn = ev.target;
+      while (btn && btn !== bar && !btn.getAttribute('data-tab')) btn = btn.parentNode;
+      if (!btn || btn === bar) return;
+      activateTab(btn.getAttribute('data-tab'));
+    });
+
+    bar.addEventListener('keydown', function (ev) {
+      var idx = SUB_TABS.indexOf(
+        (document.activeElement && document.activeElement.getAttribute('data-tab')) || ''
+      );
+      if (idx < 0) return;
+
+      var next = -1;
+      if (ev.key === 'ArrowRight' || ev.key === 'Right') next = (idx + 1) % SUB_TABS.length;
+      else if (ev.key === 'ArrowLeft' || ev.key === 'Left') next = (idx - 1 + SUB_TABS.length) % SUB_TABS.length;
+      else if (ev.key === 'Home') next = 0;
+      else if (ev.key === 'End') next = SUB_TABS.length - 1;
+      else return;
+
+      ev.preventDefault();
+      var name = activateTab(SUB_TABS[next]);
+      var btn = $('tab-' + name);
+      if (btn) btn.focus();
+    });
+
+    // 還原上次看的分頁；首次進來用「決策」
+    activateTab(readSavedTab() || 'decision', { silent: true });
+  }
+
   function init() {
     bindEvents();
     bindChartInteraction();
@@ -2842,6 +2938,7 @@
 
     registerServiceWorker();
     maybeShowIOSTip();
+    initSubTabs();
 
     /**
      * 路由註冊（common.js 提供）。

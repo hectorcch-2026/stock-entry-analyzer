@@ -78,6 +78,16 @@ try {
 
   await page.goto(withQuery(BASE, 'symbol', SYMBOL), { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#result:not([hidden])', { timeout: 90000 });
+
+  /* 進階技術分析位在「技術」子分頁內（個股頁已改為 4 個子分頁）。
+     分頁面板用 hidden 屬性隱藏，Playwright 的 visible 判定會失敗，
+     所以必須先切到該分頁。這一步不是測試技巧，而是真實使用者路徑：
+     使用者要看到這四張卡，本來就得先點「技術」。 */
+  const techTab = await page.$('#tab-tech');
+  if (techTab) {
+    await page.click('#tab-tech');
+    await page.waitForTimeout(250);
+  }
   await page.waitForSelector('#advModules .adv-mod', { timeout: 30000 });
   await page.waitForTimeout(900);
 

@@ -114,6 +114,11 @@ await page.waitForSelector('#result:not([hidden])', { timeout: 60000 }).catch(()
 // 等待超過引導提示的 2.5s 延遲，確認它確實沒被觸發
 await page.waitForTimeout(3600);
 
+/* 圖表與技術位表格都在「技術」子分頁內（個股頁已改為 4 個子分頁）。
+   hidden 面板內的 canvas 尺寸為 0、取不到墨水，先切分頁才量得到真值。 */
+await page.click('#tab-tech').catch(() => {});
+await page.waitForTimeout(400);
+
 /* --- 環境判定 --- */
 const env = await page.evaluate(() => ({
   standaloneAttr: window.navigator.standalone === true,

@@ -709,8 +709,456 @@ t('H12 情緒量表在分數缺席時不畫指針（不可假裝有值）', () =
 });
 
 /* ============================================================
-   結果
+   I 看好／看跌雙欄分析（news-sides）
+   ------------------------------------------------------------
+   這一節全部針對「靜默出錯」設計。規則層是無 LLM Key 時唯一的輸出，
+   若它把利空判成利多，使用者看到的是反向結論，比空白更糟。
    ============================================================ */
+
+section('I 看好／看跌雙欄分析');
+
+const newsSides = require('../lib/news-sides');
+
+t('I1 毛利率指引下修必須判為看跌（片語優先於單詞）', () => {
+  /* 這是實際踩到的 bug：句中同時有 margin（舊版正面詞）與 down，
+     舊版把「毛利率被下修」放進看好欄第一名。 */
+  const s = 'Memory costs push December-quarter gross margin guidance down to 45% to 46%, pressuring the upside case.';
+  const c = newsSides.cueScore(s);
+  assert.ok(c.net < 0, `指引下修 net 應為負，實得 ${c.net}`);
+});
+
+t('I2 常見句型的極性判定正確', () => {
+  const cases = [
+    ['The company cut its full-year guidance, citing weaker demand.', -1],
+    ['Gross margin declined to 45.2% from 48.1% a year earlier.', -1],
+    ['Apple beat analysts expectations with record revenue of $120 billion.', 1],
+    ['Demand for the new iPhone remains strong, with shipments outpacing last year.', 1],
+    ['The company lowered its cost structure significantly.', 1],
+    ['Siri AI expenses increased operating expenditure and weighed on margins.', -1],
+  ];
+  for (const [s, sign] of cases) {
+    const c = newsSides.cueScore(s);
+    assert.ok(sign > 0 ? c.net > 0 : c.net < 0, `「${s.slice(0, 40)}…」net=${c.net} 應為${sign > 0 ? '正' : '負'}`);
+  }
+});
+
+t('I3 制式旁白句不得被當成要點', () => {
+  /* 實測曾把「Reuters did not report a corresponding removal…」當成看跌要點。 */
+  assert.ok(newsSides.isJunkSentence('Reuters did not report a corresponding removal from Google Play.'));
+  assert.ok(newsSides.isJunkSentence('A spokesperson declined to comment on the matter.'));
+  assert.ok(!newsSides.isJunkSentence('Gross margin declined to 45.2% from 48.1% a year earlier.'));
+});
+
+t('I4 他家主語的句子不得算作標的要點', () => {
+  const ctx = { name: 'Apple Inc.', symbol: 'AAPL' };
+  // Verizon 那篇的開頭句，情緒明確但講的是別家公司
+  assert.ok(!newsSides.isRelevantSentence(
+    "Verizon's shares have gained 15.6% over the past year compared with the industry's growth of 92.8%.", ctx));
+  // 自家主語要保留；且 "Apple Inc." 必須能匹配 "Apple shares"（去後綴比對）
+  assert.ok(newsSides.isRelevantSentence('Apple shares rose 0.43% to $355.58 at the close.', ctx));
+});
+
+t('I5 截斷的目錄式導言不得被當成要點', () => {
+  assert.ok(newsSides.isListySentence('Netflix and Apple battle for streaming dominance as contrasting growth outlooks, holiday content…'));
+  // 逗號多但語意完整的財報句必須保留
+  assert.ok(!newsSides.isListySentence('Free cash flow reached about $136 billion in fiscal 2026, up nearly 38%, as revenue rose 15%.'));
+});
+
+t('I6 財務事實能解析真實資料形狀（metrics 為物件）', () => {
+  /* 實測 /api/macro/:symbol 的 metrics 是物件：比率是純數字，
+     絕對值是 { value, yoy }，營收年增率在 revenue.yoy 而無 revenueYoY。 */
+  const fund = {
+    fundamentals: {
+      entityName: 'Apple Inc.',
+      asOf: '2025-09-27',
+      source: 'SEC',
+      metrics: {
+        revenue: { value: 478834000000, basis: 'FY', yoy: 15.06 },
+        grossMargin: 48.79,
+        operatingMargin: 33.01,
+        netMargin: 27.6,
+        epsDiluted: { value: 8.98 },
+        roe: 117.92,
+        debtRatio: 72.29,
+      },
+    },
+  };
+  const fin = newsSides.buildFinancialFacts(fund);
+  assert.strictEqual(fin.available, true);
+  assert.strictEqual(fin.facts.length, 8);
+  const yoy = fin.facts.find((f) => f.key === 'revenueYoY');
+  assert.strictEqual(yoy.value, 15.06, '營收年增率需取自 revenue.yoy');
+});
+
+t('I7 ROE 虛高時不得美化為「資本效率好」', () => {
+  /* AAPL ROE 117.92% 是庫藏股讓權益縮小所致，
+     寫成「ROE 偏高、資本使用效率好」會誤導使用者拿去和同業比較。 */
+  const fund = { fundamentals: { metrics: { roe: 117.92, grossMargin: 48.79, netMargin: 27.6, debtRatio: 72.29 } } };
+  const fin = newsSides.buildFinancialFacts(fund);
+  const read = newsSides.buildRuleRead(fin, 1, 1);
+  assert.ok(/權益縮小/.test(read), '必須說明 ROE 偏高的原因是權益縮小');
+  assert.ok(!/資本使用效率好/.test(read), '不得把虛高 ROE 講成資本效率好');
+});
+
+t('I8 財報摘要句不得出現嵌套括號', () => {
+  const fund = { fundamentals: { metrics: { roe: 117.92, grossMargin: 48.79 } } };
+  const fin = newsSides.buildFinancialFacts(fund);
+  const line = newsSides.financialSummaryLine(fin);
+  assert.ok(line.indexOf('（高（') < 0, `摘要句出現嵌套括號：${line}`);
+  assert.ok(/ROE 117.92（高）/.test(line), `摘要句格式不符：${line}`);
+});
+
+t('I9 兩層輸出結構一致（前端只寫一套渲染）', () => {
+  /* 實測第一次規則層缺 sentiment/focus，LLM 層缺 side/topic/time，
+     前端就出現 undefined。這裡直接比對兩層的鍵集合。 */
+  const articles = [
+    { title: 'Apple beats expectations with record revenue', publisher: 'Reuters', body: 'Apple beat analysts expectations with record revenue of $120 billion. Gross margin rose to 49%.', time: 1, ageText: '1小時前', topic: 'financial', topicLabel: '財務', bodyChars: 90 },
+    { title: 'Apple cuts guidance on memory costs', publisher: 'Bloomberg', body: 'Apple cut its December-quarter guidance as memory costs pressured margins.', time: 2, ageText: '2小時前', topic: 'financial', topicLabel: '財務', bodyChars: 80 },
+  ];
+  const fin = newsSides.buildFinancialFacts({ fundamentals: { metrics: { grossMargin: 48.79, netMargin: 27.6 } } });
+  const rule = newsSides.classifyRuleLayer(articles, fin, { name: 'Apple Inc.', symbol: 'AAPL' });
+
+  const TOP = ['mode', 'bull', 'bear', 'neutral', 'bullCount', 'bearCount', 'focus', 'sentiment', 'financial', 'caveats'];
+  for (const k of TOP) assert.ok(k in rule, `規則層缺少頂層鍵 ${k}`);
+  assert.ok(rule.sentiment, 'sentiment 不可為空');
+  assert.ok(rule.focus, 'focus 不可為空');
+
+  const ITEM = ['title', 'publisher', 'link', 'side', 'topic', 'topicLabel', 'point', 'weight', 'newsIndex', 'fundamentalLink'];
+  for (const side of ['bull', 'bear']) {
+    for (const it of rule[side]) {
+      for (const k of ITEM) assert.ok(k in it, `${side} 項目缺少 ${k}`);
+      assert.strictEqual(it.side, side, `${side} 項目的 side 必須與所在欄一致`);
+      assert.ok(Number.isInteger(it.newsIndex) && it.newsIndex >= 1, 'newsIndex 必須是有效的 1-based 整數');
+    }
+  }
+});
+
+t('I10 方向必須與顯示的那句話一致', () => {
+  /* 舊版用整篇正文淨值決定方向，卻顯示另一句話，
+     於是「文字寫毛利率下修、卻放在看好欄」。 */
+  const articles = [{
+    title: 'Apple cuts guidance',
+    publisher: 'X',
+    body: 'Apple shares rose slightly in early trading. However the company cut its December-quarter gross margin guidance to 45%.',
+    topic: 'financial', topicLabel: '財務',
+  }];
+  const fin = newsSides.buildFinancialFacts({ fundamentals: { metrics: { grossMargin: 48.79 } } });
+  const r = newsSides.classifyRuleLayer(articles, fin, { name: 'Apple Inc.' });
+  const all = [...r.bull, ...r.bear];
+  assert.strictEqual(all.length, 1);
+  assert.strictEqual(all[0].side, 'bear', '含「下修指引」的要點必須在看跌欄');
+  assert.ok(/guidance/i.test(all[0].point), `要點文字應指向指引下修，實得：${all[0].point}`);
+});
+
+t('I11 疑問句標題不得被當成看多結論', () => {
+  const articles = [{ title: 'Is Apple Stock Outperforming the Nasdaq?', publisher: 'X', body: '', topic: 'other', topicLabel: '其他' }];
+  const fin = newsSides.buildFinancialFacts({});
+  const r = newsSides.classifyRuleLayer(articles, fin, { name: 'Apple Inc.' });
+  assert.strictEqual(r.bull.length, 0, '疑問句不得進看好欄');
+  assert.strictEqual(r.bear.length, 0, '疑問句不得進看跌欄');
+});
+
+t('I12 多空則數的措辭與實際差距相符', () => {
+  const fin = newsSides.buildFinancialFacts({ fundamentals: { metrics: { grossMargin: 48.79 } } });
+  // 4:2 差距達 33%，不該說「數量接近」
+  const read = newsSides.buildRuleRead(fin, 4, 2);
+  assert.ok(!/數量接近/.test(read), `4:2 不應描述為數量接近：${read}`);
+  assert.ok(/多於|偏多|偏正面/.test(read), `4:2 應描述為一方較多：${read}`);
+  // 5:5 才是接近
+  const tie = newsSides.buildRuleRead(fin, 5, 5);
+  assert.ok(/數量接近/.test(tie), `5:5 應描述為數量接近：${tie}`);
+});
+
+t('I13 跨欄不得重複同一要點', () => {
+  const fake = {
+    bull: [{ point: 'AI 功能帶動換機需求，服務收入可望提升', newsIndex: 1, fundamentalLink: '毛利率' }],
+    bear: [{ point: 'AI 功能帶動換機需求，服務收入可望提升', newsIndex: 1, fundamentalLink: '毛利率' }],
+    focus: 'x', fundamentalRead: 'y', caveats: [],
+  };
+  const articles = [{ title: 't', publisher: 'p', link: 'l' }];
+  const fin = newsSides.buildFinancialFacts({});
+  const { out, adjusted } = newsSides.validate(fake, articles, fin);
+  assert.strictEqual(out.bear.length, 0, '與看好欄重複的要點必須自看跌欄移除');
+  assert.ok(adjusted.some((a) => /重複/.test(a)), '移除必須留下記錄，不可靜默');
+});
+
+t('I14 只複述財務數字的要點必須剔除（否則與財報區重複）', () => {
+  /* 實測模型產出「負債比 72.29% 偏高，財務體質評級列為高負債」——
+     這不是新聞要點，是把上面財務事實換句話說，屬於重複資訊。 */
+  const fin = newsSides.buildFinancialFacts({
+    fundamentals: { metrics: { grossMargin: 48.79, netMargin: 27.6, debtRatio: 72.29, roe: 117.92 } },
+  });
+  const raw = {
+    bull: [
+      { point: '負債比 72.29% 偏高，財務體質評級列為高負債', newsIndex: 1, fundamentalLink: 'x' },
+      { point: 'FY2026 營收 4788 億美元、年增 15%，成長動能明確', newsIndex: 1, fundamentalLink: 'y' },
+    ],
+    bear: [{ point: '毛利率指引下修至 45%~46%，低於全年水準', newsIndex: 2, fundamentalLink: 'z' }],
+    focus: 'f', fundamentalRead: 'r', caveats: [],
+  };
+  const { out, adjusted } = newsSides.validate(raw, [{ title: 'a' }, { title: 'b' }], fin);
+  assert.strictEqual(out.bull.length, 1, '複述型要點應被剔除');
+  assert.ok(/營收 4788/.test(out.bull[0].point), '真事件要點必須保留');
+  // 反向確認：含事件詞的指標句是真要點，不可誤殺
+  assert.strictEqual(out.bear.length, 1, '含「下修」的指標句是真要點，不得誤殺');
+  assert.ok(adjusted.some((a) => /複述/.test(a)), '剔除必須留下記錄');
+});
+
+/* ============================================================
+   J 正文摘要提煉（AI 自動打開新聞後的「提煉主要內容」）
+   ============================================================ */
+
+section('J 正文摘要提煉');
+
+const articleFetch = require('../lib/article-fetch');
+
+t('J1 摘要不得從句子中間開始（月份與 a.m./p.m. 縮寫不可誤切）', () => {
+  /* 實測兩個真實破口：
+       「Nov. 26, 2026」被切成兩句 → 摘要變「26, 2026 (GLOBE NEWSWIRE)…」
+       「4:00 p.m. ET」被切成兩句 → 摘要停在「at the 4:00 p.m.」 */
+  const body = 'SYDNEY, Nov. 26, 2026 (GLOBE NEWSWIRE) -- ETO Markets said revenue grew 12% year over year, driven by strong demand for its platform.';
+  const s = articleFetch.summarizeBody({ body });
+  assert.ok(!/^\d+,\s*\d{4}/.test(s), `摘要不得從年份中間開始：${s}`);
+  assert.ok(/ETO Markets/.test(s), `摘要應包含主語：${s}`);
+
+  const body2 = 'Apple closed at $355.58 at the 4:00 p.m. ET close on November 25, capping a volatile session. The company said guidance would be 45% to 46%.';
+  const s2 = articleFetch.summarizeBody({ body: body2 });
+  assert.ok(!/4:00 p\.m\.$/.test(s2), `摘要不得停在 p.m.：${s2}`);
+});
+
+t('J2 公司樣板介紹不得當成摘要', () => {
+  const body = 'Apple Inc. (AAPL) is a leading multinational technology company headquartered in Cupertino, California. Companies valued at over $1 trillion are rare.';
+  assert.strictEqual(articleFetch.summarizeBody({ body }), '',
+    '整篇都是樣板時，應回空字串讓前端退回 RSS 摘要，而不是產出廢話');
+});
+
+t('J3 有實質財務內容時必須產出摘要', () => {
+  const body = 'Revenue rose 15% to $478.8 billion, while gross margin came in at 48.79%. The board approved a new $90 billion buyback program.';
+  const s = articleFetch.summarizeBody({ body });
+  assert.ok(s.length > 40, `應產出摘要，實得：${s}`);
+  assert.ok(/\$478\.8 billion|48\.79%|buyback/.test(s), `摘要應含關鍵數字：${s}`);
+});
+
+t('J4 版權與訂閱樣板句必須剔除', () => {
+  const body = 'Subscribe to read the full article. Already a member? Sign in. Copyright 2026. All rights reserved. Our analysts said revenue grew 12% to $5.2 billion this quarter.';
+  const s = articleFetch.summarizeBody({ body });
+  assert.ok(!/Subscribe|Sign in|Copyright|reserved/i.test(s), `摘要混入樣板句：${s}`);
+  assert.ok(/revenue grew/i.test(s), `應保留實質句：${s}`);
+});
+
+t('J5 正文過短時不產出摘要（避免假裝讀過）', () => {
+  assert.strictEqual(articleFetch.summarizeBody({ body: 'Short body.' }), '');
+  assert.strictEqual(articleFetch.summarizeBody({ body: '' }), '');
+});
+
+t('J6 摘要長度受控（可掃讀）', () => {
+  const long = Array.from({ length: 12 }, (_, i) =>
+    `Segment ${i} revenue grew 1${i}% to $${i} billion on strong demand for the platform and services.`).join(' ');
+  const s = articleFetch.summarizeBody({ body: long });
+  assert.ok(s.length <= 200, `摘要過長：${s.length} 字`);
+});
+
+/* ============================================================
+   K 前端呈現契約（子分頁 + 雙欄）
+   ============================================================ */
+
+section('K 前端呈現契約');
+
+const htmlSrc = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+const newsJs = fs.readFileSync(path.join(ROOT, 'public/news-ai.js'), 'utf8');
+const appJs = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8');
+
+t('K1 四個子分頁與面板都存在且 ARIA 互指', () => {
+  const tabs = ['decision', 'tech', 'fund', 'news'];
+  for (const t2 of tabs) {
+    assert.ok(htmlSrc.includes(`id="tab-${t2}"`), `缺少 #tab-${t2}`);
+    assert.ok(htmlSrc.includes(`id="panel-${t2}"`), `缺少 #panel-${t2}`);
+    assert.ok(new RegExp(`id="tab-${t2}"[^>]*aria-controls="panel-${t2}"`).test(htmlSrc),
+      `#tab-${t2} 的 aria-controls 未指向 panel`);
+    assert.ok(new RegExp(`id="panel-${t2}"[^>]*aria-labelledby="tab-${t2}"`).test(htmlSrc),
+      `#panel-${t2} 的 aria-labelledby 未指回 tab`);
+  }
+  assert.ok(htmlSrc.includes('role="tablist"'), '缺少 tablist');
+});
+
+t('K2 每個區塊只屬於一個分頁（不得重複呈現）', () => {
+  // 抓出每個 panel 內的 section 識別（id/aria-label），確認沒有跨面板重複
+  const panels = {};
+  for (const k of ['decision', 'tech', 'fund', 'news']) {
+    const re = new RegExp(`id="panel-${k}"[\\s\\S]*?<!-- /tabpanel -->`);
+    const m = htmlSrc.match(re);
+    panels[k] = m ? m[0] : '';
+    assert.ok(panels[k].length > 0, `找不到 panel-${k} 的內容`);
+  }
+  const keys = {};
+  for (const k of Object.keys(panels)) {
+    const ids = [...panels[k].matchAll(/(?:id|aria-label)="([^"]+)"/g)].map((m) => m[1]);
+    for (const id of ids) {
+      assert.ok(!keys[id], `「${id}」同時出現在 ${keys[id]} 與 ${k}，造成重複內容`);
+      keys[id] = k;
+    }
+  }
+});
+
+t('K3 新聞卡有雙欄容器與財務解讀出口', () => {
+  for (const id of ['newsAiFocus', 'newsAiBullList', 'newsAiBearList',
+    'newsAiBullCount', 'newsAiBearCount', 'newsAiFinRead', 'newsAiFinFacts']) {
+    assert.ok(htmlSrc.includes(`id="${id}"`), `缺少 #${id}`);
+  }
+});
+
+t('K4 news-ai.js 渲染雙欄且為 ES5', () => {
+  assert.ok(newsJs.includes('renderSidesColumn'), '未見雙欄渲染函式');
+  const code = newsJs.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.ok(!/=>/.test(code), '不得使用箭頭函式');
+  assert.ok(!/\b(const|let)\s/.test(code), '不得使用 const/let');
+  assert.ok(!/`/.test(code), '不得使用模板字串');
+});
+
+t('K5 看好／看跌不得使用漲跌紅綠色（語義分離）', () => {
+  /* 紅綠在本站代表股價漲跌。若「看跌」用綠色、「看好」用紅色，
+     使用者會把「新聞看空」讀成「股價在跌」，這是實質誤導。 */
+  const css = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8');
+  const m = css.match(/\.sides-bull \.sides-dot[^}]*}/);
+  const m2 = css.match(/\.sides-bear \.sides-dot[^}]*}/);
+  assert.ok(m && m2, '找不到雙欄顏色規則');
+  assert.ok(!/--up|--down/.test(m[0] + m2[0]),
+    '雙欄顏色不得使用 --up/--down（漲跌色）');
+});
+
+t('K6 分頁切換使用 hidden 屬性（否則 Canvas 會量到 0 寬）', () => {
+  assert.ok(/panel\.hidden\s*=\s*!on/.test(appJs),
+    '面板必須用 hidden 屬性切換，不能只改 class');
+});
+
+t('K7 分頁 sticky 偏移需避開頂欄', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8');
+  const m = css.match(/\.sub-tabs\s*\{[^}]*position:\s*sticky[^}]*\}/);
+  assert.ok(m, '找不到 .sub-tabs sticky 規則');
+  /* 注意不能直接抓第一個 /top:\s*\d+px/：
+     命中的會是 margin-top: 16px（margin 不是偏移）。
+     必須要求前面是空白或分號，排除 margin-top / padding-top。 */
+  const top = m[0].match(/(?:^|[\s;])top:\s*(\d+)px/);
+  assert.ok(top, '.sub-tabs 未設定 sticky 的 top 偏移');
+  assert.ok(parseInt(top[1], 10) >= 50,
+    `sticky top 需避開頂欄高度（實測 62px），實得 ${top[1]}px`);
+});
+
+/* ============================================================
+   L 新聞清單品質（實測缺陷的回歸鎖）
+   ============================================================
+ *
+ * 這三條全部來自同一輪實測：AAPL 的新聞清單混進了
+ *   ① 券商公關稿（ETO Markets 13 週年）——只是文末提到 Apple
+ *   ② 三則 13F 持股異動自動稿（Summit Wealth / Cortland / VCI）
+ *   ③ 同一則 Talkie 下架事件被三家媒體各報一次
+ *   ④ 「Can VZ's New Apple Deals…」的正文整段在講 Verizon 的本益比
+ * 若不鎖住，這類污染會在換資料源或改權重時悄悄回來。
+ */
+
+section('L 新聞清單品質');
+
+t('L1 標題沒提到標的的稿必須被辨識出來', () => {
+  const subj = { symbol: 'AAPL', name: 'Apple Inc.', shortName: 'Apple' };
+  assert.strictEqual(articleFetch.mentionsSubject('ETO Markets Marks 13th Anniversary With Race Beyond Limits', subj), false,
+    '完全沒提到 Apple 的稿不應被視為本檔新聞');
+  assert.strictEqual(articleFetch.mentionsSubject('Apple Stocks Rise as AI Selloff Spares the iPhone Maker', subj), true);
+  assert.strictEqual(articleFetch.mentionsSubject('Apple Inc. $AAPL Stock: Summit Wealth Group Grows Stake', subj), true);
+});
+
+t('L2 公司後綴不影響標的辨識（Apple Inc. 要能匹配 Apple）', () => {
+  /* 這曾是真實 bug：名稱取到「Apple Inc.」時，內文寫「Apple shares」
+     就認不出來，導致所有稿都被當成「與標的無關」。 */
+  assert.strictEqual(articleFetch.mentionsSubject('Apple shares climbed on Monday', { name: 'Apple Inc.' }), true);
+  /* 反向：完全無關的稿不得因為「同為科技公司」被誤認 */
+  assert.strictEqual(articleFetch.mentionsSubject('Nvidia unveils new data center rack', { name: 'Tencent Holdings Limited' }), false);
+  assert.strictEqual(articleFetch.mentionsSubject('Tencent 0700.HK rose today', { symbol: '0700.HK' }), true);
+});
+
+t('L3 13F 持股異動自動稿必須被辨識（且不得誤殺回購）', () => {
+  for (const title of [
+    'Apple Inc. $AAPL Stock: Summit Wealth Group LLC Co. Grows Stake',
+    'Cortland Associates Inc. MO Sells 2,033 Shares of Apple Inc.',
+    'Apple Inc. $AAPL Position Decreased by VCI Wealth Management LLC',
+  ]) {
+    assert.strictEqual(articleFetch.isHoldingsNoise(title), true, `應判為持股異動稿：${title}`);
+  }
+  /* 反向保護：公司自己回購是重大資本配置決策，不可誤殺 */
+  for (const title of [
+    'Apple to buy back $100 billion in shares',
+    'Apple authorizes new $110 billion share repurchase program',
+  ]) {
+    assert.strictEqual(articleFetch.isHoldingsNoise(title), false, `回購不可誤判為持股異動：${title}`);
+  }
+});
+
+t('L4 同一事件的多家報導必須合併（Jaccard 不足時靠罕見詞）', () => {
+  /* 三個標題的 Jaccard 僅 0.31–0.50，低於 0.62 門檻，
+     真實情況是同一天出現三則。必須靠「共享兩個以上罕見詞」合併。 */
+  const r = articleFetch.dedupeByEvent([
+    { title: "Apple (AAPL) Stock: App Store Removes MiniMax's Talkie Chatbot", publisher: 'A' },
+    { title: 'Apple Removes Talkie From App Store After Reports of Inappropriate AI Messages', publisher: 'B' },
+    { title: 'Apple (AAPL) Removes Chatbot from App Store Over Child Safety Concerns', publisher: 'C' },
+  ]);
+  assert.strictEqual(r.length, 1, `同一事件應合併為 1 則，實得 ${r.length}`);
+  assert.ok(r[0].alsoReportedBy && r[0].alsoReportedBy.length >= 1, '應記錄其他報導來源');
+});
+
+t('L5 去重不得誤併不同事件', () => {
+  const pairs = [
+    ['Apple: $136 Billion Of Free Cash Flow Without The AI CapEx Bill',
+      'Apple Beats Big Tech as AAPL Stock Nears $360 Strong Earnings'],
+    ['Apple: The Hidden Risk Behind My Downgrade',
+      'Apple Is Now Worth Over $5 Trillion Without Betting Big on AI'],
+    ['Apple Removes Talkie From App Store After Reports',
+      'Apple authorizes new $110 billion share repurchase program'],
+  ];
+  for (const [a, b] of pairs) {
+    assert.strictEqual(articleFetch.dedupeByEvent([{ title: a }, { title: b }]).length, 2,
+      `不同事件被誤併：${a.slice(0, 30)} / ${b.slice(0, 30)}`);
+  }
+});
+
+t('L6 正文主體不是標的時，摘要必須作廢（不得張冠李戴）', () => {
+  /* 實例：標題「Can VZ's New Apple Deals…」，正文 661 字從頭到尾沒出現 Apple，
+     整段在講 Verizon 的本益比 8.93。舊版會把 Verizon 的分析當成這則的摘要。 */
+  const vz = {
+    title: "Can VZ's New Apple Deals and Loyalty Benefits Drive Subscriber Growth?",
+    body: 'Verizon Communications has been expanding its customer base. From a valuation standpoint, '
+      + 'Verizon trades at a forward price-to-earnings ratio of 8.93, significantly below the industry average of 15.2. '
+      + 'The company added 128,000 postpaid phone subscribers in the quarter, beating analyst estimates of 95,000.',
+  };
+  assert.strictEqual(articleFetch.summarizeBody(vz, { symbol: 'AAPL', name: 'Apple Inc.' }), '',
+    '正文完全沒提到標的時應回空字串');
+
+  /* 正對照：正文主體是 Apple 時必須正常產出 */
+  const ok = {
+    title: 'Apple Stocks Rise as AI Selloff Spares the iPhone Maker',
+    body: 'The resilience reflects a strategy that puts AI into the roughly 2.5 billion Apple devices already in customers hands. '
+      + 'Apple has avoided the massive data center spending that has pressured margins at Microsoft and Meta.',
+  };
+  const s = articleFetch.summarizeBody(ok, { symbol: 'AAPL', name: 'Apple Inc.' });
+  assert.ok(s.length > 40, `正文主體正確時應產出摘要，實得：${s}`);
+});
+
+t('L7 分析師免責聲明不得當成摘要', () => {
+  /* Seeking Alpha 類正文開頭整段是 disclosure，含 AAPL 會通過標的錨定，
+     但完全沒有文章內容。 */
+  const body = 'At the beginning of November Apple ( AAPL ) reported its Q4 2026 results. '
+    + "Analyst's Disclosure: I/we have a beneficial long position in the shares of AAPL, AMZN, GOOGL. "
+    + 'I wrote this article myself, and it expresses my own opinions. I am not receiving compensation for it.';
+  const s = articleFetch.summarizeBody({ body, title: 'Apple: $136 Billion Of Free Cash Flow' },
+    { symbol: 'AAPL', name: 'Apple Inc.' });
+  assert.ok(!/Disclosure|beneficial long position|compensation/i.test(s),
+    `摘要混入免責聲明：${s}`);
+});
+
+t('L8 summarizeBody 未給 subject 時維持原行為（不可破壞舊呼叫端）', () => {
+  const body = 'Revenue rose 15% to $478.8 billion, while gross margin came in at 48.79%. '
+    + 'The board approved a new $90 billion buyback program.';
+  const s = articleFetch.summarizeBody({ body });
+  assert.ok(s.length > 40, `未給 subject 時仍應產出摘要，實得：${s}`);
+});
 
 console.log('\n' + '='.repeat(56));
 console.log(`  通過 ${pass}　失敗 ${fail}　共 ${pass + fail}`);

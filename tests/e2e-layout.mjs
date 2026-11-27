@@ -13,6 +13,11 @@ async function shot(name, w, h, mobile) {
   await p.waitForSelector('#result:not([hidden])', { timeout: 60000 }).catch(()=>{});
   await p.waitForTimeout(2500);
 
+  // 圖表與技術位表格都在「技術」子分頁內。這裡先切過去再量測，
+  // 否則 hidden 面板內的 canvas 只會得到 0 墨水，會被誤判成「沒畫」。
+  await p.click('#tab-tech').catch(() => {});
+  await p.waitForTimeout(400);
+
   const info = await p.evaluate(() => {
     const res = document.getElementById('result');
     const cv = document.getElementById('priceChart');
