@@ -180,7 +180,15 @@ Render 約 1–2 分鐘完成，Railway 約 30–60 秒。
 
 - 網址：https://stock-entry-analyzer.onrender.com
 - 來源：GitHub `hectorcch-2026/stock-entry-analyzer` 分支 `main`，`autoDeploy: true`
-- 目前版本：`f509093`（v1.4：K 線預測與 AI 選股）
+- 目前版本：`b349ea8`（v1.4：更名「股票量化分析專業介面」、個股財報移至個股模塊、新聞 AI 分析、版塊輪動 × 宏觀）
+- 前端快取版本：Service Worker `v1.0.11`
+
+> 更新程式碼後，Render 約 30 秒～2 分鐘完成部署。可用下列指令確認新版是否已生效
+> （`<title>` 會隨版本改變，比看時間戳可靠）：
+>
+> ```bash
+> curl -s https://stock-entry-analyzer.onrender.com/ | grep -oE "<title>[^<]*</title>"
+> ```
 
 ### 線上驗收
 

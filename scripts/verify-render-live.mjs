@@ -25,8 +25,20 @@ await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForSelector('#mainNav', { timeout: 60000 });
 
 console.log('[1] 導航與頁面結構');
-const navCount = await page.locator('#mainNav [data-route]').count();
-rec('三個主要導航項存在', navCount === 3, `${navCount} 項`);
+// 只數「使用者看得到」的導航項。#mainNav 內另有一個 nav-detail（個股詳情專用，
+// 由路由動態顯示），它不是獨立入口。原本寫死 ===3 的斷言在新增「版塊輪動」
+// 與「宏觀與基本面」後失效，且會把隱藏項一起數進去。
+const navItems = await page.$$eval('#mainNav [data-route]', (els) =>
+  els
+    .filter((e) => !e.hidden && getComputedStyle(e).display !== 'none')
+    .map((e) => e.getAttribute('data-route'))
+);
+const EXPECTED_ROUTES = ['predict', 'screen', 'macro', 'rrg'];
+rec(
+  '四個主要導航項存在（K線預測 / AI選股 / 宏觀基本面 / 版塊輪動）',
+  EXPECTED_ROUTES.every((r) => navItems.includes(r)),
+  `${navItems.length} 項可見：${navItems.join(', ')}`
+);
 
 const views = await page.evaluate(() => ({
   predict: !!document.querySelector('#viewChart'),
