@@ -5,13 +5,49 @@ services:
   - type: web
     name: stock-entry-analyzer
     runtime: node
-    plan: free
     region: singapore
     branch: main
+    # 刻意不寫 plan。
+    #
+    # Render 的文件寫明：省略 plan 時，「既有服務會保留目前的 compute 方案」。
+    # 這正是我要的——把方案交給 Dashboard 決定，而不是由這個檔案猜。
+    #
+    # 為什麼不能留著舊的 `plan: free`：Blueprint 同步是以檔案為準，
+    # 留著它就會把服務改回免費方案（連帶回到會休眠的狀態），
+    # 而**持久磁碟只提供給付費的 web service**——一降級，磁碟就掛不上。
+    #
+    # 為什麼也不寫一個具體的 ID：Render 現在的方案是以 CPU/記憶體命名
+    # （0.5c-512mb / 1c-2g / 2c-4g …），價格從 $7 到 $135/月不等。
+    # 隨便填一個等於替使用者決定月費，填錯還會讓同步失敗。
+    #
+    # 註：Pro 是「workspace 方案」，與服務的 compute 方案是兩件事。
+    #     磁碟要的是**這個服務**在付費方案上，請在 Dashboard 的
+    #     Instance Type 確認服務本身不是 Free。
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /api/health
     autoDeploy: true
+
+    # ---- 持久磁碟 ----
+    #
+    # 為什麼掛在 data/ 整個目錄，而不是只掛帳本：
+    #   · 帳本（data/tracker）是唯一不能重算的檔案，必須保留；
+    #   · data/picks 是每日推介快照，tracker 靠它補跑歷史。
+    #     若重啟後 picks 不見了，補跑就沒有素材，只能從當天重新開始。
+    #     一起保留，重啟後歷史軌跡才連得起來。
+    #   · 全部加起來現在只有 97KB，1GB 可以用非常久。
+    #
+    # 掛載點必須是 /opt/render/project/src 的**子目錄**
+    # （Render 不允許掛在 /opt、/opt/render/project/src 本身）。
+    # 掛在 data/ 的好處：程式預設的帳本路徑剛好就在裡面，
+    # 不必為了掛載去改程式邏輯。
+    #
+    # sizeGB 取 1：文件建議「選目前能用的最小值」，而且之後只能增不能減。
+    disk:
+      name: tracker-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
     envVars:
       - key: NODE_VERSION
         value: "20"
@@ -50,19 +86,22 @@ services:
       # 這是全服務**唯一不能重算**的檔案：其他 data/ 底下都是快取，
       # 刪掉會自動重建；帳本刪掉就是歷史交易永久消失。
       #
-      # Render 預設是 ephemeral filesystem，免費方案也沒有持久磁碟，
-      # 每次部署、以及免費方案休眠（15 分鐘無流量）後重啟，
-      # 容器都是全新的 —— 帳本會安靜地變回空的，且不會有錯誤訊息。
-      # 因此：**要保留歷史，必須掛持久磁碟並把路徑指到掛載點**。
+      # 上方已宣告 disk，掛載點是 /opt/render/project/src/data，
+      # 而帳本預設就寫在 data/tracker/ledger.json —— 兩者自然對上，
+      # 所以**不需要**再設 TRACKER_LEDGER_FILE。
+      # 若之後想把帳本放到別處（例如多服務共用一顆磁碟），才需要覆寫。
       #
-      # 步驟：
-      #   1. Dashboard → 本服務 → Disk → Add Disk
-      #      Mount Path: /var/data    Size: 1 GB 起
-      #   2. 把下面這行的註解拿掉（或直接在 Environment 設定同一個值）
-      #   3. 重新部署；啟動日誌會印出「帳本位置」與是否持久可保存
+      # 如何確認真的生效（部署後看這兩處，不要只看程式有沒有報錯）：
+      #   1. 啟動日誌應印出「帳本位置：/opt/render/project/src/data/tracker/ledger.json」
+      #      **且不應**出現「⚠ 帳本可能無法長期保存」
+      #   2. GET /api/tracker/status → ledger.persistent 應為 true
+      # 這兩處同時為真，才代表資料真的活得過重新部署。
       #
-      # 未掛磁碟時程式仍可運作，只是每次重啟歸零；
-      # 啟動日誌與 /api/tracker/status 都會標示 persistent:false 提醒。
+      # 判斷依據是 st_dev：帳本目錄與程式根目錄若在不同裝置，
+      # 代表它掛在一顆獨立磁碟上，那才會被保留。
+      #
+      # 注意：掛了磁碟後，重新部署期間會有數秒中斷（Render 必須先停舊實例
+      # 才能掛載新磁碟，避免兩個版本同時寫同一顆碟），這是預期行為。
       # - key: TRACKER_LEDGER_FILE
       #   value: /var/data/tracker/ledger.json
 
