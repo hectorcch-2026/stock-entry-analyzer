@@ -34,6 +34,7 @@ const analyzer = require('./lib/analyzer');
 const forecast = require('./lib/forecast');
 const datasource = require('./lib/datasource');
 const telegram = require('./lib/telegram');
+const llm = require('./lib/llm');
 const kline = require('./lib/kline');
 const screener = require('./lib/screener');
 const scheduler = require('./lib/scheduler');
@@ -308,11 +309,25 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (pathname === '/api/health') {
-      return sendJSON(res, 200, { ok: true, service: 'stock-entry-analyzer', time: Date.now(), telegram: telegram.isConfigured() });
+      return sendJSON(res, 200, {
+        ok: true,
+        service: 'stock-entry-analyzer',
+        time: Date.now(),
+        telegram: telegram.isConfigured(),
+        // LLM 狀態：部署後要確認環境變數有沒生效，看這裡最快。
+        // 只回報「有沒有、指向哪、用哪個模型」與金鑰指紋，不外洩金鑰。
+        llm: llm.describeConfig(),
+      });
     }
 
     if (pathname === '/api/config') {
-      return sendJSON(res, 200, { ok: true, telegramConfigured: telegram.isConfigured(), weights: analyzer.WEIGHTS });
+      return sendJSON(res, 200, {
+        ok: true,
+        telegramConfigured: telegram.isConfigured(),
+        llmConfigured: llm.isConfigured(),
+        aiMode: llm.isConfigured() ? 'llm' : 'rule',
+        weights: analyzer.WEIGHTS,
+      });
     }
 
     // 資料來源連線診斷：部署環境若封鎖對外網路，可由此確認
@@ -998,13 +1013,24 @@ const server = http.createServer(async (req, res) => {
 
       if (scope === 'macro') {
         const ov = await macro.getMacroOverview({ force: q.refresh === '1' });
-        let llm = null;
-        if (wantLlm) llm = await interpret.polishWithLlm(ov.interpretation);
+        let llmOut = null;
+        if (wantLlm) llmOut = await interpret.polishWithLlm(ov.interpretation);
         return sendJSON(res, 200, {
           ok: true,
           scope: 'macro',
           interpretation: ov.interpretation,
-          llm: llm ? { text: llm.text, mode: llm.mode, note: llm.note } : null,
+          // polishWithLlm 只回 { text, mode, note }，不含模型名。
+          // 這裡補上「設定中的模型」與「設定來源」，排查時才能確認
+          // 是走了哪個模型、以及是環境變數還是 config.json 生效。
+          // 這些不是機密（describeConfig 只給金鑰指紋），能省一輪猜謎。
+          //
+          // 注意變數名用 llmOut：若命名為 llm 會遮蔽上方的 llm 模組，
+          // 導致 llm.describeConfig() 變成「對回傳物件呼叫不存在的方法」。
+          llm: llmOut ? {
+            text: llmOut.text, mode: llmOut.mode, note: llmOut.note,
+            model: llm.describeConfig().model,
+            configSource: llm.describeConfig().source,
+          } : null,
           generatedAt: ov.generatedAt,
         });
       }
@@ -1016,16 +1042,20 @@ const server = http.createServer(async (req, res) => {
         if (!norm.ok) return sendError(res, 400, norm.code, norm.message, norm.hint);
 
         const out = await macro.getSymbolOverview(norm.value, {});
-        let llm = null;
+        let llmOut = null;
         if (wantLlm && out.interpretation && out.interpretation.available !== false) {
-          llm = await interpret.polishWithLlm(out.interpretation);
+          llmOut = await interpret.polishWithLlm(out.interpretation);
         }
         return sendJSON(res, 200, {
           ok: true,
           scope: 'fundamentals',
           symbol: out.symbol,
           interpretation: out.interpretation,
-          llm: llm ? { text: llm.text, mode: llm.mode, note: llm.note } : null,
+          llm: llmOut ? {
+            text: llmOut.text, mode: llmOut.mode, note: llmOut.note,
+            model: llm.describeConfig().model,
+            configSource: llm.describeConfig().source,
+          } : null,
           generatedAt: out.generatedAt,
         });
       }

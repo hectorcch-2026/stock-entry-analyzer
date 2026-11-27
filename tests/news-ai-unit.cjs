@@ -1622,6 +1622,91 @@ t('P5 複製全文必須用後端算好的純文字，不在前端重拼', () =>
   assert.ok(/rep\.text/.test(js), '必須讀取後端提供的純文字版本');
 });
 
+/* ============================================================
+   Q LLM 設定自我揭露（部署後排查用）
+   ============================================================ */
+
+section('Q LLM 設定自我揭露（不外洩金鑰）');
+
+t('Q1 describeConfig 回報必要欄位', () => {
+  const d = llm.describeConfig();
+  for (const k of ['configured', 'source', 'baseUrl', 'model', 'apiKeyHint']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(d, k), `缺欄位 ${k}`);
+  }
+  assert.ok(['env', 'file', 'none'].indexOf(d.source) >= 0, `source 值非法：${d.source}`);
+});
+
+t('Q2 金鑰只給指紋，絕不外洩完整值', () => {
+  const d = llm.describeConfig();
+  const serialized = JSON.stringify(d);
+  const realKey = llm.loadLlmConfig().apiKey;
+
+  if (realKey && realKey.length > 10) {
+    assert.ok(!serialized.includes(realKey),
+      '完整金鑰出現在 describeConfig 的輸出中——這會隨 /api/health 公開');
+    assert.ok(d.apiKeyHint && d.apiKeyHint.includes('…'),
+      '指紋應為「前4…後4」格式');
+    // 指紋長度必須遠小於金鑰，否則等於洩漏
+    assert.ok(d.apiKeyHint.length < realKey.length / 2,
+      `指紋過長（${d.apiKeyHint.length} vs 金鑰 ${realKey.length}）`);
+  }
+});
+
+t('Q3 無金鑰時 configured=false，且不拋錯', () => {
+  // 用 LLM_CONFIG_PATH='' 模擬「完全沒有設定」的部署環境
+  const bak = { k: process.env.LLM_API_KEY, o: process.env.OPENAI_API_KEY, p: process.env.LLM_CONFIG_PATH };
+  delete process.env.LLM_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  process.env.LLM_CONFIG_PATH = '';
+  try {
+    const d = llm.describeConfig();
+    assert.strictEqual(d.configured, false, '無金鑰時 configured 必須為 false');
+    assert.strictEqual(d.source, 'none');
+    assert.strictEqual(d.apiKeyHint, null);
+    assert.strictEqual(llm.isConfigured(), false);
+  } finally {
+    if (bak.k !== undefined) process.env.LLM_API_KEY = bak.k;
+    if (bak.o !== undefined) process.env.OPENAI_API_KEY = bak.o;
+    if (bak.p === undefined) delete process.env.LLM_CONFIG_PATH;
+    else process.env.LLM_CONFIG_PATH = bak.p;
+  }
+});
+
+t('Q4 環境變數優先於設定檔（部署時靠這個）', () => {
+  const bak = { k: process.env.LLM_API_KEY, p: process.env.LLM_CONFIG_PATH, m: process.env.LLM_MODEL };
+  process.env.LLM_API_KEY = 'sk-env-test-key-0123456789';
+  process.env.LLM_MODEL = 'env-model';
+  process.env.LLM_CONFIG_PATH = '';
+  try {
+    const d = llm.describeConfig();
+    assert.strictEqual(d.source, 'env', '有環境變數時 source 必須是 env');
+    assert.strictEqual(d.model, 'env-model');
+    assert.ok(d.apiKeyHint.startsWith('sk-e'), `指紋應取自環境變數，實際 ${d.apiKeyHint}`);
+  } finally {
+    if (bak.k === undefined) delete process.env.LLM_API_KEY; else process.env.LLM_API_KEY = bak.k;
+    if (bak.m === undefined) delete process.env.LLM_MODEL; else process.env.LLM_MODEL = bak.m;
+    if (bak.p === undefined) delete process.env.LLM_CONFIG_PATH; else process.env.LLM_CONFIG_PATH = bak.p;
+  }
+});
+
+t('Q5 /api/health 有回報 llm 狀態（部署驗證的入口）', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.ok(/llm:\s*llm\.describeConfig\(\)/.test(src),
+    '/api/health 必須回報 llm 狀態，否則部署後無法確認環境變數是否生效');
+});
+
+t('Q6 render.yaml 已宣告 LLM 三個變數且為 sync:false', () => {
+  const y = fs.readFileSync(path.join(ROOT, 'render.yaml'), 'utf8');
+  for (const k of ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL']) {
+    assert.ok(new RegExp(`key:\\s*${k}`).test(y), `render.yaml 缺 ${k}`);
+  }
+  // 金鑰類必須 sync:false，否則會被寫進 repo
+  const seg = y.slice(y.indexOf('LLM_API_KEY'));
+  assert.ok(/sync:\s*false/.test(seg.slice(0, 60)),
+    'LLM_API_KEY 必須 sync:false，不可寫死在 repo');
+  assert.ok(/LLM_DISABLE_THINKING/.test(y), '必須宣告 LLM_DISABLE_THINKING（否則正文會被推理吃掉）');
+});
+
 console.log('\n' + '='.repeat(56));
 console.log(`  通過 ${pass}　失敗 ${fail}　共 ${pass + fail}`);
 console.log('='.repeat(56));

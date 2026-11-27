@@ -15,9 +15,33 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
-      # 以下兩項 sync:false —— Render 會在首次部署時要求你手動填寫，
+      # 以下各項 sync:false —— Render 會在首次部署時要求你手動填寫，
       # 不會被寫進 repo（等同 config.json 的作用）。
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+
+      # ---- LLM（DeepSeek）----
+      # 程式讀取順序：環境變數 → config.json。
+      # config.json 已列入 .gitignore，Render 讀不到，所以一定要用環境變數。
+      #
+      # 換成自己的供應商時，只要改這三個值，不必動程式。
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+      # 推理型模型（DeepSeek-V4.1-flash）會先產生 reasoning_content，
+      # 且其 token 計入 max_tokens —— 實測推理量在 1340–6167 之間波動，
+      # 會把正文擠成空字串。本專案的 LLM 任務只是分類與改寫語氣，
+      # 不需要推理，因此關閉思考；實測回應時間由 12–29 秒降到約 1–2 秒。
+      #
+      # 這兩個用 value 而非 sync:false：它們不是機密，且設錯會直接導致
+      # 「有金鑰但輸出空白」這種極難排查的症狀，寫在 repo 裡反而安全。
+      - key: LLM_DISABLE_THINKING
+        value: "1"
+      - key: LLM_MAX_TOKENS
+        value: "3000"

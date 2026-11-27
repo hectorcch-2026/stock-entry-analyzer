@@ -220,6 +220,52 @@ Render 約 1–2 分鐘完成，Railway 約 30–60 秒。
 > curl -s https://stock-entry-analyzer.onrender.com/ | grep -oE "<title>[^<]*</title>"
 > ```
 
+### 啟用 LLM 解讀（DeepSeek）
+
+線上站台預設跑**規則層**（`ai.mode === 'rule'`）：所有數字由程式計算、解讀文字機械但完整。
+要改用 LLM 改寫語氣，需在 Render 設定三個環境變數。
+
+> **為什麼一定要用環境變數**：`config.json` 已列入 `.gitignore`，不會被部署到
+> Render，所以線上的 LLM 只能從環境變數讀取。本機則是環境變數優先、`config.json` 次之。
+
+**Render Dashboard → 該服務 → Environment → Add Environment Variable**
+
+| Key | Value | 備註 |
+|---|---|---|
+| `LLM_BASE_URL` | `https://www.moyu.cn/v1` | 必須含 `/v1`；這裡是 OpenAI 相容端點 |
+| `LLM_API_KEY` | `sk-…` | DeepSeek 金鑰；**只存在 Render，不進 repo** |
+| `LLM_MODEL` | `DeepSeek-V4.1-flash` | 模型名需與供應商完全一致（含大小寫與版本號） |
+
+另外兩個**必須**一起設（`render.yaml` 已預先寫好，手動設定時別漏）：
+
+| Key | Value | 為什麼 |
+|---|---|---|
+| `LLM_DISABLE_THINKING` | `1` | 推理型模型會先產生 `reasoning_content`，且其 token **計入 `max_tokens`**。實測推理量在 1340–6167 之間波動，會把正文擠成空字串——症狀是「有金鑰、呼叫成功、但內文空白」。本專案只需分類與改寫語氣，關閉思考後延遲由 12–29 秒降到 1–2 秒 |
+| `LLM_MAX_TOKENS` | `3000` | 關閉思考後 3000 足夠；若之後改回推理模型需調到 8000 |
+
+**設定後驗證**（不要只看有沒有填值——填錯時「有值」也是 true）：
+
+```bash
+npm run verify:llm
+```
+
+這支腳本會檢查五件事，並**實際呼叫一次模型**要求 `mode === 'llm'`：
+
+1. `/api/health` 是否讀到金鑰（`llm.configured`）
+2. 來源是否為 `env`（若顯示 `file`，代表 Render 上讀到了不該存在的 `config.json`）
+3. `baseUrl` 是否以 `/v1` 結尾
+4. `disableThinking` 是否為 true
+5. 模型是否真的產生非空繁體中文輸出
+
+> **一個容易誤判的點**：`/api/interpret` 預設是 `mode=rule`，只有明確帶
+> `?mode=llm` 才會呼叫模型（避免使用者只是開頁面就燒 API 額度）。
+> 少了這個參數會永遠看到 `mode=rule`，但**那不是金鑰失效**。
+> 驗證腳本已內含此參數。
+
+> **回應中的 `llm.mode` 與 `interpretation.mode` 是兩件事**：
+> `interpretation` 是規則層結果（`mode` 固定 `rule`，永遠都有），
+> `llm` 才是模型潤飾結果（可能成功 `llm`、或失敗退回 `rule` 並在 `note` 說明原因）。
+
 ### 線上驗收
 
 ```bash
