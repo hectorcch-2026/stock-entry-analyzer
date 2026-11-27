@@ -54,6 +54,8 @@ const newsSides = require('./lib/news-sides');
 const newsKeywords = require('./lib/news-keywords');
 const newsViewpoints = require('./lib/news-viewpoints');
 const sectorMacroAi = require('./lib/sector-macro-ai');
+const macroCharts = require('./lib/macro-charts');
+const ratesForecast = require('./lib/rates-forecast');
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -762,6 +764,31 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, out);
     }
 
+    /* ----------------------------------------------------------
+       宏觀走勢圖（需求 4）
+
+       GET /api/macro/charts?ids=rates,spread&range=5y&maxPoints=260
+
+       ids 省略時回全部 6 張圖。每張圖已由後端確認「同圖多線單位相同」，
+       前端不需要（也不應該）自行組合序列——疊錯單位會讓某條線被壓成直線，
+       而畫面看起來只像「這指標沒變化」。
+
+       ⚠️ 這一段必須排在 /api/macro/:symbol 之前：
+          `/api/macro/charts` 一樣符合 startsWith('/api/macro/')，
+          若排後面會被當成「代碼叫作 charts 的股票」而回 400。
+       ---------------------------------------------------------- */
+    if (pathname === '/api/macro/charts' && req.method === 'GET') {
+      const ids = q.ids ? String(q.ids).split(',').map((s) => s.trim()).filter(Boolean) : null;
+      const out = await macroCharts.getCharts({
+        ids,
+        range: q.range || null,
+        maxPoints: q.maxPoints ? Number(q.maxPoints) : 260,
+        force: q.refresh === '1',
+      });
+      if (!out.ok) return sendError(res, 400, out.code, out.message, out.hint);
+      return sendJSON(res, 200, out);
+    }
+
     // /api/macro/AAPL
     if (pathname.startsWith('/api/macro/') && req.method === 'GET') {
       const raw = decodeURIComponent(pathname.slice('/api/macro/'.length)).trim();
@@ -795,6 +822,28 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/data-dict' && req.method === 'GET') {
       const out = await macro.getDataDictionary();
+      return sendJSON(res, 200, out);
+    }
+
+    /* ----------------------------------------------------------
+       利率期貨隱含路徑（需求 5）
+
+       GET /api/rates/forecast?quarters=8&refresh=1
+
+       資料來自 CME 3 個月 SOFR 期貨（SR3）與 30 天聯邦基金期貨（ZQ）。
+       每個季度點都附 contract / price / impliedRate / asOf / sourceUrl，
+       可逐點回查上游。
+       ---------------------------------------------------------- */
+    if (pathname === '/api/rates/forecast' && req.method === 'GET') {
+      const quarters = q.quarters ? Number(q.quarters) : ratesForecast.DEFAULT_QUARTERS;
+      if (!isFinite(quarters) || quarters < 1 || quarters > 12) {
+        return sendError(res, 400, 'BAD_QUARTERS',
+          'quarters 必須是 1–12 的整數', '預設 8 季；期貨流動性只到 2028 年底，超過部分的合約可能不存在');
+      }
+      const out = await ratesForecast.getRateForecast({
+        quarters: Math.round(quarters),
+        force: q.refresh === '1',
+      });
       return sendJSON(res, 200, out);
     }
 

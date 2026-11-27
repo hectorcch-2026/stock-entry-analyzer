@@ -959,6 +959,28 @@
         </div>
       </section>
 
+      <!-- 走勢圖（需求 4）：資料來自 /api/macro/charts。
+           容器由 macro-charts.js 填入多張圖卡；每張圖的序列已在後端
+           確認單位相同，前端不做二次組合。 -->
+      <section class="card mc-section" aria-labelledby="macroChartsTitle">
+        <header class="card-head">
+          <h2 id="macroChartsTitle">數據走勢</h2>
+          <span class="badge badge-neutral" id="macroChartsBadge">—</span>
+        </header>
+        <p class="mc-section-note">
+          折線只連接實際觀測值，缺值處斷線（不以 0 補點）。
+          長跨度序列經降採樣，保留轉折處極值。
+        </p>
+        <div id="macroCharts" class="mc-grid">
+          <p class="mc-empty">載入中…</p>
+        </div>
+      </section>
+
+      <!-- 利率期貨隱含路徑（需求 5）：資料來自 /api/rates/forecast -->
+      <div id="ratesForecast" class="rf-host">
+        <p class="mc-empty">載入中…</p>
+      </div>
+
       <!-- FOMC 會議時程 -->
       <section class="card" aria-labelledby="fomcTitle">
         <header class="card-head">
@@ -1345,6 +1367,7 @@
 <script src="/app.js"></script>
 <script src="/screen.js"></script>
 <script src="/macro.js"></script>
+<script src="/macro-charts.js"></script>
 <script src="/rrg-client.js"></script>
 <script src="/rrg-treemap.js"></script>
 <script src="/news-ai.js"></script>

@@ -628,6 +628,18 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 | `macroAiWatch` | 觀察重點 |
 | `macroAiProv` | 來源與時間標註 |
 
+### 7.1.1 宏觀走勢圖與利率期貨模組（v1.7）
+
+| id | 用途 |
+|---|---|
+| `macroCharts` | 走勢圖卡容器（6 張圖由 JS 動態產生） |
+| `macroChartsBadge` | 走勢圖狀態 badge |
+| `ratesForecast` | 利率期貨模組外層容器 |
+
+圖卡內部由 `public/macro-charts.js` 產生，class 前綴固定：
+`mc-`（macro chart）、`rf-`（rate forecast）。測試會驗「前端產生的每個 class
+都有樣式」，避免元件出現但沒有外觀。
+
 ### 7.2 前端限制
 
 - **ES5 語法**（`var` / `function`，禁 `const` `let` 箭頭函式 模板字串）— 與 `app.js` 一致
@@ -647,6 +659,126 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 - [x] `mode=rule` 時 `aiMode === 'rule'` 且 schema 完全相同
 - [x] 無金鑰環境下仍回 200 且規則層完整
 - [x] `GET /api/sector-macro-ai` 回 200，`ranking` 11 筆、`strengthScore` 可排序
+
+---
+
+## 9. 宏觀走勢圖與利率期貨模組（v1.7）
+
+### 9.1 `GET /api/macro/charts`
+
+```
+?ids=rates,spread,inflation,labor,activity,sentiment   （省略＝全部）
+&range=1y|3y|5y|10y|max                              （省略＝各圖預設）
+&maxPoints=260                                        （12–1200）
+&refresh=1                                            （繞過快取）
+```
+
+回應（單張圖的形狀）：
+
+```jsonc
+{
+  "ok": true,
+  "scope": "macro-charts",
+  "charts": [{
+    "id": "rates",
+    "title": "政策利率與公債殖利率",
+    "unit": "%",
+    "range": "5y",
+    "sharedScale": true,        // 同圖多線是否共用 y 軸（後端已驗證單位一致）
+    "zeroLine": false,          // 利差圖為 true，否則看不出正負
+    "series": [{
+      "key": "dgs10",
+      "label": "10 年期公債殖利率",
+      "points": [{ "date": "2026-11-24", "value": 4.91 }],
+      "count": 260,             // 圖上實際點數
+      "total": 1249,            // 完整視窗點數
+      "sampled": true,          // 是否降採樣
+      "step": "約每月",
+      "from": "2021-11-24",
+      "to": "2026-11-24",
+      "value": 4.91,
+      "stats": { "min": 1.35, "max": 5.31, "first": 1.64, "last": 4.91, "change": 3.27, "changePct": 199.39 },
+      "sourceUrl": "https://fred.stlouisfed.org/series/DGS10"
+    }],
+    "available": true,
+    "missing": 0,
+    "status": "ok"             // ok | degraded | unavailable
+  }],
+  "status": { "total": 6, "available": 6, "unavailable": 0, "degraded": false }
+}
+```
+
+**設計約束（由測試 `macro-charts-unit.cjs` 鎖住）**
+
+| 約束 | 理由 |
+|---|---|
+| `stats.min/max` 以**完整視窗**計算，不是降採樣後的點 | 否則同一天重整兩次會得到不同的 y 軸，看起來像資料變了 |
+| LTTB 降採樣必須保留頭尾與極值 | 等距抽樣會跳過 2020-03 的急殺與 2022 的通膨高點，畫出一條「很正常的假線」 |
+| 缺值斷線，不以 0 補點 | 補 0 會畫出「跌到零」的假線段 |
+| 同圖多線單位必須一致 | 失業率（%）疊工業生產（102.5）會讓失業率被壓成一條直線，看起來像「沒變化」 |
+| `getSeries().points` 維持「筆數」不變 | 既有前端與測試把它當數字用；改成陣列會讓呼叫端拿到 `NaN` 而不是報錯 |
+
+### 9.2 `GET /api/rates/forecast?quarters=8`
+
+```jsonc
+{
+  "ok": true,
+  "scope": "rates-forecast",
+  "points": [{
+    "quarter": "2027Q1",
+    "contract": "SR3Z26.CME",
+    "price": 95.7275,
+    "impliedRate": 4.2725,        // = 100 − price
+    "vsAnchorBp": 33,             // 相對基準（見 anchor.kind）
+    "asOf": "2026-11-27",
+    "periodStart": "2027-01-01",
+    "referencePeriod": "2026-12 第三個星期三起至 2027-03 第三個星期三",
+    "sourceUrl": "https://finance.yahoo.com/quote/SR3Z26.CME",
+    "available": true
+  }],
+  "path": {
+    "direction": "up",            // up | down | flat
+    "totalBp": 6,
+    "peak": { "quarter": "2027Q3", "rate": 4.635, "contract": "SR3M27.CME" },
+    "trough": { "quarter": "2027Q1", "rate": 4.2725, "contract": "SR3Z26.CME" },
+    "covered": 8, "missing": 0
+  },
+  "anchor": { "kind": "SOFR", "value": 3.94, "asOf": "2026-11-24" },
+  "timeRange": { "from": "2027Q1", "to": "2028Q4", "quarters": 8 },
+  "updateFrequency": { "quote": "盤中延遲報價…", "quoteTtlMinutes": 5 },
+  "sources": [ /* CME SR3 / ZQ=F / FRED SOFR / FRED DFEDTARU */ ],
+  "traceability": { "formula": "隱含利率（%）= 100 − 期貨價格", "perPoint": [...] },
+  "limitations": [ ... ]
+}
+```
+
+**三個非顯而易見的決定**
+
+1. **用 SOFR（SR3）而不是 Fed Funds（ZQ）。**
+   實測 ZQ 在 Yahoo 只報到 2027-12，且遠月成交量極低（`ZQZ27` 僅 158 口），
+   8 季會有 4 季缺值。SR3 九張合約全部有價、成交量 5–10 萬口、涵蓋到 2028-12。
+
+2. **季度標籤取「參考期中點所屬季」，不是合約月份。**
+   3M SOFR 的 3 月合約，參考期是 3/17–6/16，主要定價 Q2。
+   若直接標成 Q1，整條曲線位移一季——而數字看起來完全正常，最難發現。
+   因此 `contractMonthOfQuarter(c, Q2) = 3 月`，並逐點附 `referencePeriod`。
+
+3. **基準利率的選擇必須記錄在 `anchor.kind`。**
+   「相對基準 +33 bp」若沒說基準是什麼就無法查核。優先序：
+   SOFR 現值 → ZQ 隱含值 → 政策利率中點。三者標的不同，
+   混用會產生不可解釋的基差（SOFR 為有擔保，通常高於 EFFR 5–15 bp）。
+
+### 9.3 交叉驗證（2026-11-27 實測）
+
+| 季別 | SR3 隱含 | ZQ 隱含 | 基差 |
+|---|---|---|---|
+| 2027Q1 | 4.272 | 4.055 | 22 bp |
+| 2027Q2 | 4.525 | 4.370 | 15 bp |
+| 2027Q3 | 4.635 | 4.565 | 7 bp |
+| 2027Q4 | 4.620 | 4.580 | 4 bp |
+| 2028Q1 | 4.535 | 4.495 | 4 bp |
+
+基差單調收斂、方向一致，符合期限結構預期——這證明拿到的不是插值出來的假曲線。
 - [x] `macroLinks` 每筆有 `value/asOf/percentile/thesis/supports|pressures`
 - [x] 簡體輸出被偵測並修正；仍殘留則 `hantOk:false`
 - [x] 模型講廢話再吐 JSON 時解析成功（容錯解析器）

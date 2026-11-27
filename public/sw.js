@@ -47,7 +47,11 @@
 //          「結構化匯報」三塊（index.html / styles.css / news-ai.js 皆改），
 //          且 /api/stock-news-ai 回應多了 keywords / viewpoints / report 三個欄位。
 //          不升版的話，舊 Service Worker 會繼續供給沒有這三塊的舊 news-ai.js。
-const VERSION = 'v1.0.12';
+// v1.0.13：新增 macro-charts.js（走勢圖與利率期貨模組）並改動 index.html /
+//          macro.js / styles.css。不升版的話舊 shell 會繼續供應沒有
+//          <script src="/macro-charts.js"> 的 index.html，
+//          結果就是區塊永遠停在「載入中…」——而且 console 不會有錯誤。
+const VERSION = 'v1.0.13';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
@@ -64,6 +68,7 @@ const SHELL_ASSETS = [
   '/common.js',
   '/screen.js',
   '/macro.js',
+  '/macro-charts.js',
   '/rrg-client.js',
   '/rrg-treemap.js',
   '/news-ai.js',

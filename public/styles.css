@@ -1809,6 +1809,224 @@ div.fomc-next {
 .limit-list li:last-child { margin-bottom: 0; }
 .limit-list ::marker { color: var(--text-3); }
 
+/* ============================================================
+   宏觀走勢圖與利率期貨隱含路徑（需求 4、5）
+   ------------------------------------------------------------
+   命名前綴：mc-（macro chart）、rf-（rate forecast）
+   顏色：一律用既有變數；**刻意不用 --up / --down**，
+        那兩個是「漲紅跌綠」的價格語義，走勢圖與利率預測
+        不是價格漲跌，挪用會誤導。
+   ============================================================ */
+
+.mc-section { padding-bottom: 14px; }
+
+.mc-section-note {
+  margin: 0 0 12px; font-size: 12px; line-height: 1.65;
+  color: var(--text-3);
+}
+
+.mc-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.mc-card {
+  margin: 0;
+  padding: 12px 13px 10px;
+  box-shadow: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.mc-head {
+  align-items: flex-start;
+  padding: 0 0 8px;
+  border-bottom: none;
+}
+
+.mc-head-text { min-width: 0; }
+
+.mc-title {
+  margin: 0 0 3px; font-size: 13.5px; font-weight: 700;
+  letter-spacing: .2px; color: var(--text);
+}
+
+.mc-sub {
+  margin: 0; font-size: 11.5px; line-height: 1.6;
+  color: var(--text-3);
+}
+
+.mc-range {
+  flex: 0 0 auto; margin-left: 10px;
+  font-size: 10.5px; letter-spacing: .3px;
+}
+
+.mc-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  margin: 6px 0 8px;
+  font-size: 11.5px; color: var(--text-2);
+}
+
+.mc-legend-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.mc-legend-item b {
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--text); font-weight: 600;
+}
+.mc-legend-unit { color: var(--text-3); font-size: 10.5px; }
+.mc-legend-miss { color: var(--text-3); text-decoration: line-through solid 1px; }
+
+.mc-dot {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; flex: 0 0 auto;
+}
+
+.mc-canvas-wrap {
+  position: relative;
+  width: 100%;
+  /* 高度由 JS 依寬度計算並寫在 canvas 的 style 上；
+     這裡只負責不要讓 canvas 變成 inline 元素而多出基線空隙。 */
+  line-height: 0;
+}
+.mc-canvas-wrap canvas { display: block; max-width: 100%; }
+
+.mc-foot {
+  margin: 8px 0 0;
+  font-size: 10.5px; line-height: 1.6; color: var(--text-3);
+  /* 逐序列的「共 N 筆」說明可能很長，允許換行但不要擠成一團 */
+  word-break: break-word;
+}
+
+.mc-empty {
+  margin: 0; padding: 18px 4px;
+  font-size: 12.5px; color: var(--text-3); text-align: center;
+}
+
+/* ---------------- 利率期貨隱含路徑 ---------------- */
+
+.rf-host { display: block; }
+
+.rf-card { padding-bottom: 14px; }
+
+.rf-headline {
+  margin: 4px 0 10px;
+  padding: 9px 12px;
+  font-size: 12.5px; line-height: 1.75;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-2);
+}
+.rf-headline b { color: var(--text); font-family: var(--mono); }
+
+/* 方向只用中性色 + 文字說明。
+   不用紅綠，因為「利率上升」不等於「股價上漲」。 */
+.rf-dir { font-weight: 700; color: var(--text); }
+.rf-up .rf-dir { color: #b45309; }
+.rf-down .rf-dir { color: #0e7490; }
+.rf-flat .rf-dir { color: var(--text-2); }
+
+.rf-meta {
+  display: grid; gap: 6px 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 10px 0 12px;
+  font-size: 11.5px; line-height: 1.6;
+}
+.rf-meta > div {
+  min-width: 0;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.rf-meta dt {
+  margin: 0 0 2px; font-size: 10.5px; letter-spacing: .3px;
+  color: var(--text-3);
+}
+.rf-meta dd { margin: 0; color: var(--text); word-break: break-word; }
+.rf-dim { color: var(--text-3); font-size: 10.5px; }
+
+.rf-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.rf-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 11.5px;
+}
+.rf-table th {
+  padding: 6px 8px; text-align: left;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.rf-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: middle;
+}
+.rf-table tbody tr:last-child td { border-bottom: none; }
+.rf-table tbody tr:hover td { background: #fafbfd; }
+.rf-table .ta-r { text-align: right; font-family: var(--mono); }
+
+.rf-q { white-space: nowrap; color: var(--text); }
+.rf-c { white-space: nowrap; font-family: var(--mono); font-size: 10.5px; }
+.rf-c a { color: var(--brand); text-decoration: none; }
+.rf-c a:hover { text-decoration: underline; }
+.rf-px { color: var(--text-3); }
+.rf-note { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+
+/* 相對基準的 bp 變化：這裡是「利率相對高低」，
+   仍不用紅綠。正負用文字符號（+/-）承載語義即可。 */
+.rf-table .v-up { color: #b45309; }
+.rf-table .v-down { color: #0e7490; }
+
+.rf-miss td { color: var(--text-3); }
+.rf-miss .rf-note { font-style: italic; }
+
+.rf-more {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.rf-more summary {
+  cursor: pointer; font-size: 11.5px; font-weight: 600;
+  color: var(--text-2); letter-spacing: .2px;
+  padding: 3px 0;
+}
+.rf-more summary:hover { color: var(--text); }
+.rf-more[open] summary { margin-bottom: 8px; }
+
+.rf-formula {
+  margin: 0 0 8px; font-size: 11.5px; line-height: 1.7;
+  color: var(--text-2);
+}
+.rf-formula b { color: var(--text); }
+
+.rf-src {
+  margin: 0 0 8px; padding-left: 18px;
+  font-size: 11.5px; line-height: 1.75; color: var(--text-2);
+}
+.rf-src li { margin-bottom: 3px; }
+.rf-src a { color: var(--brand); text-decoration: none; }
+.rf-src a:hover { text-decoration: underline; }
+
+/* ============================================================
+   走勢圖／利率預測：響應式
+   ============================================================ */
+@media (max-width: 720px) {
+  .rf-meta { grid-template-columns: 1fr; }
+  .mc-card { padding: 10px 10px 8px; }
+  .mc-legend { font-size: 11px; gap: 3px 10px; }
+  .mc-foot { font-size: 10px; }
+
+  /* 表格在窄螢幕不強迫壓縮：讓它橫向捲動，
+     否則「合約代碼」會斷字成兩行、數字對不齊。 */
+  .rf-table { min-width: 520px; }
+  .rf-headline { font-size: 12px; padding: 8px 10px; }
+}
+
 /* ---------------- 資料字典 ---------------- */
 .dict-intro {
   margin: 0 0 12px; font-size: 12.5px; line-height: 1.65;

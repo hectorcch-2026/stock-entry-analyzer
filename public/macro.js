@@ -487,6 +487,13 @@
         renderLimits(d.limitations);
         renderInterp(d.interpretation, null);
 
+        // 走勢圖與利率期貨各自獨立載入：任一邊失敗都不影響表格與解讀，
+        // 且兩者都不阻塞主資料的呈現（先讓使用者看到表格）。
+        if (global.MacroCharts) {
+          global.MacroCharts.loadCharts(force);
+          global.MacroCharts.loadRates(force);
+        }
+
         var st = d.status || {};
         setStamp('資料時間 ' + new Date(d.generatedAt).toLocaleString('zh-TW', { hour12: false }));
 
