@@ -1160,6 +1160,21 @@ t('L8 summarizeBody 未給 subject 時維持原行為（不可破壞舊呼叫端
   assert.ok(s.length > 40, `未給 subject 時仍應產出摘要，實得：${s}`);
 });
 
+t('L9 規則層的「市場焦點」必須說出關注點，不能只數則數', () => {
+  /* 實測規則層舊版輸出：「市場焦點集中在財務（4 則），方向多空分歧。」
+     這等於沒回答「市場在關注什麼」。必須把兩邊權重最高的要點帶進來。 */
+  const f = newsSides.buildFocusFallback(
+    [{ point: 'FY2026 營收達 4,788.34 億美元、年增 15.06%', weight: 3.2, topicLabel: '財務' }],
+    [{ point: '記憶體價格被形容為「前所未見」，製造成本壓力明顯升溫', weight: 3.5, topicLabel: '財務' }]
+  );
+  assert.ok(/看好方|看跌方/.test(f), `焦點描述應指出雙方關注點：${f}`);
+  /* 千分位逗號不可被當成停頓切斷（實測會切成「FY2026 營收達 4」） */
+  assert.ok(f.includes('4,788.34'), `千分位數字被切斷：${f}`);
+  /* 不得出現疊引號或殘缺引號 */
+  assert.ok(!/[「」][^「」]*〉|〉[^「」]*[「」]/.test(f), `引號殘缺：${f}`);
+  assert.ok(!/集中在財務（\d+ 則）。$/.test(f), `只數則數不算焦點：${f}`);
+});
+
 console.log('\n' + '='.repeat(56));
 console.log(`  通過 ${pass}　失敗 ${fail}　共 ${pass + fail}`);
 console.log('='.repeat(56));
