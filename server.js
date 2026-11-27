@@ -59,6 +59,7 @@ const macroCharts = require('./lib/macro-charts');
 const ratesForecast = require('./lib/rates-forecast');
 const picksTracker = require('./lib/picks-tracker');
 const trackerJobMod = require('./lib/tracker-job');
+const trackerNotify = require('./lib/tracker-notify');
 
 /* ==========================================================
    推介追蹤的單例
@@ -85,11 +86,17 @@ const trackerTracker = picksTracker;   // 供 STATUS_LABEL 等常數使用
  * trackerStore 在檔案上方就建立了，但那時 pool / screener 還沒載入，
  * 若一起注入會拿到 undefined，任務就永遠不會產生當日清單。
  */
+const trackerNotifier = trackerNotify.createNotifier({
+  tracker: trackerStore,
+  telegram,
+});
+
 const trackerJob = trackerJobMod.createJob({
   tracker: trackerStore,
   scheduler,
   screenDeps: { analyzer, forecast, datasource, symbols: pool.byMarket('all') },
   runner: screener,
+  notifier: trackerNotifier,
 });
 
 const PORT = process.env.PORT || 5177;
@@ -777,10 +784,12 @@ const server = http.createServer(async (req, res) => {
          /api/tracker   「過去推薦了什麼、現在怎麼樣」——跨日累積的帳本
 
        端點：
-         GET /api/tracker                 帳本清單 + 累計盈虧摘要
-         GET /api/tracker?run=1           立即更新（強制，需 token）
-         GET /api/tracker?preview=1       只讀，不觸發任何計算
-         GET /api/tracker/status          排程狀態（上次執行、待補日期）
+         GET /api/tracker                      帳本清單 + 累計盈虧摘要
+         GET /api/tracker?run=1                立即更新（強制，需 token）
+         GET /api/tracker?preview=1            只讀，不觸發任何計算
+         GET /api/tracker?notify=1             立刻推一則 Telegram（需 token，無視每日鎖）
+         GET /api/tracker/status               排程狀態（上次執行、待補日期）+ 推送狀態
+         GET /api/tracker/status?notifyPreview=1  預覽會推送的訊息內容（不送出）
 
        為什麼更新與讀取要分開：
          更新會打上游抓日線，數十檔要十幾秒。前端開頁時只需要「現在有什麼」，
@@ -798,9 +807,33 @@ const server = http.createServer(async (req, res) => {
           '請在 query 帶上 token=…（伺服器端設定 PICKS_TOKEN）');
       }
 
+      /* ---- 手動推送 Telegram ----
+         為什麼要 token：這會真的發一則訊息到使用者的手機，屬於有副作用的操作。
+         為什麼要 force：使用者按下「現在推一次」的意思就是「不管今天推過沒」，
+         若沿用每日鎖就會被擋下、看起來像壞掉。 */
+      if (q.notify === '1') {
+        if (token && String(q.token || '') !== token) {
+          return sendError(res, 403, 'FORBIDDEN', '手動推送需要有效的 token',
+            '請在 query 帶上 token=…（伺服器端設定 PICKS_TOKEN）');
+        }
+        const result = await trackerNotifier.push({ force: true });
+        return sendJSON(res, 200, { ok: true, notify: result });
+      }
+
       // status 端點只回狀態，不跑任何東西
       if (pathname === '/api/tracker/status') {
-        return sendJSON(res, 200, { ok: true, job: trackerJob.status(), ledger: trackerStore.stats() });
+        const payload = {
+          ok: true,
+          job: trackerJob.status(),
+          ledger: trackerStore.stats(),
+          notifier: trackerNotifier.status(),
+        };
+        // 只組訊息、不送出：讓人可以先看看會推什麼，再決定要不要真的推。
+        // 這條不需要 token，因為它沒有任何副作用（不寫檔、不發訊息）。
+        if (q.notifyPreview === '1') {
+          payload.notifier.preview = trackerNotifier.preview();
+        }
+        return sendJSON(res, 200, payload);
       }
 
       let jobResult = null;
