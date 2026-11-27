@@ -1707,6 +1707,32 @@ t('Q6 render.yaml 已宣告 LLM 三個變數且為 sync:false', () => {
   assert.ok(/LLM_DISABLE_THINKING/.test(y), '必須宣告 LLM_DISABLE_THINKING（否則正文會被推理吃掉）');
 });
 
+t('Q7 驗證腳本涵蓋三個吃 LLM 的端點（只驗一個會漏）', () => {
+  /* 站上有三個地方各自獨立呼叫模型、各有降級路徑，且失敗時都回 200。
+     只驗 /api/interpret 的話，另外兩支壞掉時腳本仍會全綠 ——
+     這種「綠燈但壞掉」比沒有腳本更危險，因此用測試釘住覆蓋範圍。 */
+  const src = fs.readFileSync(path.join(ROOT, 'scripts', 'verify-llm-live.mjs'), 'utf8');
+  for (const p of ['/api/interpret', '/api/stock-news-ai', '/api/sector-macro-ai']) {
+    assert.ok(src.includes(p), `驗證腳本未涵蓋 ${p}`);
+  }
+  // 三個端點的判斷欄位不同，必須各自正確，否則會誤報失敗
+  assert.ok(src.includes("'ai.mode'"), '新聞／版塊端點的模式欄位是 ai.mode');
+  assert.ok(src.includes("'provenance.aiModel'"),
+    '模型名只在 provenance.aiModel，ai.model 不存在');
+  // /api/interpret 的模式必須取自 llm 區塊。interpretation.mode 恆為 'rule'，
+  // 讀它會讓「模型明明成功」被判成失敗（已踩過）。
+  assert.ok(/const mode\s*=\s*llmBlock\s*&&\s*llmBlock\.mode/.test(src),
+    '/api/interpret 的模式必須取自 llmBlock.mode，不可取自 interpretation.mode');
+});
+
+t('Q8 驗證腳本有 --quick 逃生門且預設為完整驗證', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'scripts', 'verify-llm-live.mjs'), 'utf8');
+  assert.ok(src.includes('--quick'), '缺 --quick，兩個慢端點會讓例行檢查變得不便');
+  // 預設（無 --quick）必須是完整的：QUICK 只由參數決定，不可預設 true
+  assert.ok(/const QUICK = ARGS\.includes\('--quick'\)/.test(src),
+    'QUICK 必須只由 --quick 參數決定，不可預設略過端點');
+});
+
 console.log('\n' + '='.repeat(56));
 console.log(`  通過 ${pass}　失敗 ${fail}　共 ${pass + fail}`);
 console.log('='.repeat(56));
