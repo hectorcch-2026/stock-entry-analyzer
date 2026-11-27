@@ -118,12 +118,63 @@ ok('大小寫／空白不同也算同一檔', () => {
   assert.strictEqual(b.action, 'duplicate-day', `應擋下，實際 ${b.action}`);
 });
 
-ok('不同日期可以再推介同一檔', () => {
+ok('不同日期：待買入時不重複建立記錄（duplicate-pending）', () => {
   const t = T.create({ filePath: null, datasource: fakeDs({}, {}) });
   t.addPick(mkRow(), { pickDate: '2026-03-02' });
   const b = t.addPick(mkRow(), { pickDate: '2026-03-03' });
-  // 但此時 03-02 那筆仍未結案 → 應被 duplicate-open 擋下
+  // 前一筆還掛著單在等價格 → 不再掛第二張一樣的單
+  assert.strictEqual(b.action, 'duplicate-pending', `應為 duplicate-pending，實際 ${b.action}`);
+  assert.strictEqual(t.records.length, 1, '不得長出第二筆記錄');
+});
+
+ok('不同日期：持倉中時擋下（duplicate-open）', () => {
+  const t = T.create({ filePath: null, datasource: fakeDs({}, {}) });
+  const { record } = t.addPick(mkRow(), { pickDate: '2026-03-02' });
+  // 讓它成交
+  t.applyCandles(record, [bar('2026-03-03', 106, 108, 100, 104)], USD_FX);
+  assert.strictEqual(record.status, 'holding');
+  const b = t.addPick(mkRow(), { pickDate: '2026-03-04' });
   assert.strictEqual(b.action, 'duplicate-open', `應為 duplicate-open，實際 ${b.action}`);
+});
+
+ok('待買入的重複不佔每日名額，會讓位給次優標的', () => {
+  // 這是實際踩到的坑：11-24 的 PDD（78 分）待買入，
+  // 若把它算成「重複」而佔掉 11-26 的名額，補位上來的會是 72 分的股票，
+  // 清單就不再是「當日條件最佳」。
+  const t = T.create({ filePath: null, datasource: fakeDs({}, {}) });
+  t.addPick(mkRow({ symbol: 'PDD', score: 78 }), { pickDate: '2026-03-02' });
+
+  const rows = [
+    mkRow({ symbol: 'TOP', score: 90 }),
+    mkRow({ symbol: 'PDD', score: 78 }),      // 已在待買入
+    mkRow({ symbol: 'THIRD', score: 70 }),
+    mkRow({ symbol: 'FOURTH', score: 60 }),
+  ];
+  const out = t.addPicks(rows, { pickDate: '2026-03-03', limit: 3 });
+
+  // 名額 3：TOP、THIRD、FOURTH —— PDD 被跳過但不佔位
+  assert.deepStrictEqual(out.inserted.map((r) => r.symbol), ['TOP', 'THIRD', 'FOURTH'],
+    `實際收錄 ${out.inserted.map((r) => r.symbol).join(',')}`);
+  assert.strictEqual(out.duplicatesPending.length, 1);
+  assert.strictEqual(out.duplicatesPending[0].symbol, 'PDD');
+});
+
+ok('持倉中的重複**會**佔用名額（不讓位）', () => {
+  // 與上面相反：已持倉代表本金真的投進去了，
+  // 這時不該再為同一檔投入第二份本金，名額直接消耗掉。
+  const t = T.create({ filePath: null, datasource: fakeDs({}, {}) });
+  const { record } = t.addPick(mkRow({ symbol: 'HELD', score: 90 }), { pickDate: '2026-03-02' });
+  t.applyCandles(record, [bar('2026-03-03', 106, 108, 100, 104)], USD_FX);
+  assert.strictEqual(record.status, 'holding');
+
+  const rows = [
+    mkRow({ symbol: 'HELD', score: 90 }),
+    mkRow({ symbol: 'B', score: 80 }),
+    mkRow({ symbol: 'C', score: 70 }),
+  ];
+  const out = t.addPicks(rows, { pickDate: '2026-03-04', limit: 2 });
+  assert.deepStrictEqual(out.inserted.map((r) => r.symbol), ['B', 'C']);
+  assert.strictEqual(out.duplicatesOpen.length, 1);
 });
 
 ok('allowOpenDuplicate 可放行同日以外的重複開倉', () => {

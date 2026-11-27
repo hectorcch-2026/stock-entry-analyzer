@@ -57,6 +57,40 @@ const newsViewpoints = require('./lib/news-viewpoints');
 const sectorMacroAi = require('./lib/sector-macro-ai');
 const macroCharts = require('./lib/macro-charts');
 const ratesForecast = require('./lib/rates-forecast');
+const picksTracker = require('./lib/picks-tracker');
+const trackerJobMod = require('./lib/tracker-job');
+
+/* ==========================================================
+   推介追蹤的單例
+   ----------------------------------------------------------
+   為什麼是模組層級而非每個請求新建：
+     帳本要跨請求累積（記憶體中的 records 就是最新狀態），
+     每次請求重建就得重讀一次 JSON，且「進行中的更新」無法互斥。
+     放在模組層級，tracker-job 內部的 inflight 才能真正擋住併發。
+
+   為什麼要在啟動時就 load：
+     歷史記錄必須在服務啟動後立刻可讀。若延遲到第一次請求才載入，
+     使用者第一次開頁會看到「沒有任何記錄」，誤以為功能壞了。
+   ========================================================== */
+const trackerStore = picksTracker.create({
+  datasource,
+  capitalUsd: Number(process.env.TRACKER_CAPITAL_USD) > 0
+    ? Number(process.env.TRACKER_CAPITAL_USD) : picksTracker.DEFAULT_CAPITAL_USD,
+});
+const trackerLoad = trackerStore.load();
+const trackerTracker = picksTracker;   // 供 STATUS_LABEL 等常數使用
+
+/**
+ * 每日任務。這裡才注入 scheduler 與 screener：
+ * trackerStore 在檔案上方就建立了，但那時 pool / screener 還沒載入，
+ * 若一起注入會拿到 undefined，任務就永遠不會產生當日清單。
+ */
+const trackerJob = trackerJobMod.createJob({
+  tracker: trackerStore,
+  scheduler,
+  screenDeps: { analyzer, forecast, datasource, symbols: pool.byMarket('all') },
+  runner: screener,
+});
 
 const PORT = process.env.PORT || 5177;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -735,7 +769,83 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    /* 篩選條件中繼資料：讓前端不必硬編碼預設值 */
+    /* ==========================================================
+       推介追蹤（每日精選推介追蹤）
+       ----------------------------------------------------------
+       與 /api/picks 的分工：
+         /api/picks     「今天有哪些候選」——每天一份快照，會整份重寫
+         /api/tracker   「過去推薦了什麼、現在怎麼樣」——跨日累積的帳本
+
+       端點：
+         GET /api/tracker                 帳本清單 + 累計盈虧摘要
+         GET /api/tracker?run=1           立即更新（強制，需 token）
+         GET /api/tracker?preview=1       只讀，不觸發任何計算
+         GET /api/tracker/status          排程狀態（上次執行、待補日期）
+
+       為什麼更新與讀取要分開：
+         更新會打上游抓日線，數十檔要十幾秒。前端開頁時只需要「現在有什麼」，
+         不該被迫等一次完整更新。預設讀取走「訪問觸發但節流」——
+         第一次有人開頁會更新，30 分鐘內再開就直接讀檔。
+       ========================================================== */
+
+    if (pathname === '/api/tracker' || pathname === '/api/tracker/status') {
+      const force = q.run === '1' || q.force === '1';
+      const previewOnly = q.preview === '1';
+      const token = process.env.PICKS_TOKEN || '';
+
+      if (force && token && String(q.token || '') !== token) {
+        return sendError(res, 403, 'FORBIDDEN', '強制更新需要有效的 token',
+          '請在 query 帶上 token=…（伺服器端設定 PICKS_TOKEN）');
+      }
+
+      // status 端點只回狀態，不跑任何東西
+      if (pathname === '/api/tracker/status') {
+        return sendJSON(res, 200, { ok: true, job: trackerJob.status(), ledger: trackerStore.stats() });
+      }
+
+      let jobResult = null;
+      if (!previewOnly) {
+        try {
+          jobResult = await trackerJob.dailyRun({ force });
+        } catch (e) {
+          // 更新失敗不該讓「看歷史」也跟著失效：帳本已經有資料就照樣回傳
+          jobResult = { ran: false, reason: `更新失敗：${e.message}` };
+        }
+      }
+
+      const listOpts = {
+        status: q.status ? String(q.status).split(',') : null,
+        symbol: q.symbol || null,
+        from: q.from || null,
+        to: q.to || null,
+        limit: q.limit ? Number(q.limit) : null,
+      };
+      const rows = trackerStore.list(listOpts);
+      const sum = trackerStore.summary();
+
+      return sendJSON(res, 200, {
+        ok: true,
+        updated: jobResult,
+        // 帳本
+        summary: sum,
+        count: rows.length,
+        records: rows,
+        // 前端下拉用：帳本裡出現過的推介日期（新到舊）
+        dates: [...new Set(trackerStore.records.map((r) => r.pickDate))].sort().reverse(),
+        statusLabel: trackerTracker.STATUS_LABEL,
+        statusOrder: trackerTracker.STATUS_ORDER,
+        recovered: trackerStore.recovered || null,
+        schedule: {
+          throttleMinutes: Math.round(trackerJob.status().throttleMinutes),
+          dailyLimit: trackerJob.status().dailyLimit,
+          minScore: trackerJob.status().minScore,
+          capitalUsd: trackerStore.capitalUsd,
+          note: '每次有人開啟本頁會檢查是否該更新；30 分鐘內重複開啟直接讀檔。已結案的記錄永不重算。',
+        },
+      });
+    }
+
+
     if (pathname === '/api/screen/meta') {
       return sendJSON(res, 200, {
         ok: true,
@@ -1753,6 +1863,18 @@ server.listen(PORT, '0.0.0.0', () => {
   const ps = pool.summary();
   console.log(`  選股母體： ${ps.total} 檔（港股 ${ps.hk} / 美股 ${ps.us}）`);
   console.log(`  資料來源： Yahoo Finance\n`);
+
+  // 推介追蹤帳本：啟動時就已載入，這裡只回報狀態
+  const ts = trackerStore.stats();
+  console.log(`  推介追蹤帳本： ${ts.records} 筆（未結案 ${ts.open} / 已結案 ${ts.settled}）`);
+  if (ts.recovered) {
+    console.log(`  ⚠ 帳本曾損壞並已備份：${ts.recovered.reason}`);
+    if (ts.recovered.backup) console.log(`     備份位置：${ts.recovered.backup}`);
+  }
+  if (trackerLoad && trackerLoad.corrupt) {
+    console.log('  ⚠ 帳本為損壞後重建的空帳本，歷史記錄可能不完整');
+  }
+  console.log('');
 
   // L2 進程內定時（預設不啟用，見 lib/scheduler.js 的說明）
   scheduler.startInterval(
