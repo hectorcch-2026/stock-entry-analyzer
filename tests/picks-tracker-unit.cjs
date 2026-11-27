@@ -845,6 +845,33 @@ ok('記憶體模式回報 null 而非 true', () => {
   assert.strictEqual(T.persistenceInfo(null).persistent, null);
 });
 
+/* ---- [16] 參數名打錯必須爆，不可靜默退回真實帳本 ----
+   實際踩過的坑：測試腳本寫成 create({ file: tmp })，正確名稱是 filePath。
+   不認得的 key 被忽略、filePath 又是 undefined，於是**安靜地**用了
+   真正在用的帳本；接著沒呼叫 load()，dailyRun 直接把空狀態存回去，
+   本地帳本的成交紀錄與損益整批被覆蓋。
+
+   這條測試的價值在於：它防的不是算錯，而是「打錯字就毀資料」。 */
+for (const badKey of ['file', 'path', 'ledger', 'ledgerFile', 'filepath']) {
+  ok(`參數名打錯（${badKey}）要拋錯，不可退回預設帳本`, () => {
+    assert.throws(
+      () => T.create({ [badKey]: '/tmp/should-not-be-used.json' }),
+      /filePath/,
+      `create({ ${badKey}: … }) 應拋出「請用 filePath」的錯誤`,
+    );
+  });
+}
+
+ok('正確參數名稱 filePath 不受防線影響', () => {
+  const t = T.create({ filePath: null });
+  assert.strictEqual(typeof t.load, 'function', '應正常建立');
+});
+
+ok('完全不帶參數也不受防線影響', () => {
+  const t = T.create({});
+  assert.strictEqual(typeof t.load, 'function');
+});
+
 /* ---------------------------------------------------------------- */
 // 依序執行所有測試（含非同步），最後清理
 /* ---------------------------------------------------------------- */

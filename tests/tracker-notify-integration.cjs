@@ -43,7 +43,9 @@ function fresh(name) {
  * 測試就變成在驗證一個沒跑到的分支（我一開始就踩了這個坑）。
  */
 function makeJob(dir, notifier) {
-  const tracker = T.create({ file: path.join(dir, 'ledger.json'), capitalUsd: 10000 });
+  // 參數名是 filePath（不是 file）。打錯會退回真實帳本並可能覆蓋資料，
+// lib/picks-tracker 現在會直接拋錯擋住——這條整合測試當初就是被那道防線抓出來的。
+  const tracker = T.create({ filePath: path.join(dir, 'ledger.json'), capitalUsd: 10000 });
   const job = jobMod.createJob(
     {
       tracker,

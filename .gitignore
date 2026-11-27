@@ -3,6 +3,11 @@ node_modules/
 
 # 本機設定（含 Telegram token 等機密）
 config.json
+# 設定檔的備份／暫存：裡面含 bot token 與 LLM apiKey，
+# 只 ignore config.json 本身會漏掉 config.json.bak / .tmp / .old 這些。
+# 實際踩過：複製備份後差點一起 commit 上去。
+config.json.*
+!.gitignore
 
 # 測試輸出
 tests/out-*.png
