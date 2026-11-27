@@ -459,20 +459,184 @@ ok('今日新推介與持倉不重複列同一檔', async () => {
   assert.strictEqual(count, 1, `DUP 應只出現一次，實際 ${count}`);
 });
 
-ok('較早推介仍待買入的用一行交代，不逐檔列出', async () => {
+/* ── ⑤-b 等待買入段落（使用者明確要求：要看到買入價位） ── */
+
+ok('等待買入段落會列出代碼與買入價區間', async () => {
   const tg = tgStub();
-  const recs = [];
-  for (let i = 0; i < 7; i += 1) {
-    recs.push(rec({ symbol: `P${i}`, pickDate: '2026-11-10' }));
-  }
+  const recs = [
+    rec({ symbol: 'P0', pickDate: '2026-11-10', buyLow: 9, buyHigh: 10 }),
+    rec({ symbol: 'P1', pickDate: '2026-11-10', buyLow: 78.98, buyHigh: 80.37, currency: 'HKD' }),
+  ];
   const n = N.createNotifier(
     { tracker: trackerStub(recs), telegram: tg },
     { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
   );
   const pv = n.preview('2026-11-20');
-  assert.ok(pv.messages[0].includes('另有 7 檔較早推介仍在等待買區'), pv.messages[0]);
-  // 不得逐檔列出（訊息應很短）
-  assert.ok(pv.messages[0].length < 500, `不應逐檔列出，實際 ${pv.messages[0].length} 字`);
+  const msg = pv.messages[0];
+
+  assert.ok(msg.includes('等待買入'), `應有等待買入段落：${msg}`);
+  assert.ok(msg.includes('（2 檔）'), `段落標題應帶檔數：${msg}`);
+  assert.ok(msg.includes('P0'), '應列出 P0');
+  assert.ok(msg.includes('P1'), '應列出 P1');
+  // 關鍵：買入價要出現，而且要帶幣別（否則不知道是 HK$ 還是 US$）
+  assert.ok(msg.includes('買入 US$9.00 ~ 10.00'), `應顯示 USD 買區：${msg}`);
+  assert.ok(msg.includes('買入 HK$78.98 ~ 80.37'), `應顯示 HKD 買區：${msg}`);
+});
+
+ok('等待買入的單一價位（buyLow===buyHigh）不顯示區間符號', async () => {
+  const tg = tgStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([rec({ symbol: 'ONE', pickDate: '2026-11-10', buyLow: 12, buyHigh: 12 })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const pv = n.preview('2026-11-20');
+  assert.ok(pv.messages[0].includes('買入 US$12.00'), pv.messages[0]);
+  assert.ok(!pv.messages[0].includes('US$12.00 ~'), '單一價位不該出現 ~');
+});
+
+ok('等待買入不與今日新推介重複列同一檔', async () => {
+  const tg = tgStub();
+  // 今天才建立、仍是 pending：會同時符合「今日新推介」與「等待買入」
+  const n = N.createNotifier(
+    { tracker: trackerStub([rec({ symbol: 'TODAY', pickDate: '2026-11-20' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const pv = n.preview('2026-11-20');
+  const msg = pv.messages[0];
+  assert.ok(msg.includes('今日新推介'), msg);
+  assert.ok(
+    !msg.includes('等待買入'),
+    `今日新推介已列過，等待買入段落不該出現（否則同一檔講兩次）：${msg}`,
+  );
+});
+
+ok('等待買入按分數由高到低排（最值得掛單的排前面）', async () => {
+  const tg = tgStub();
+  const recs = [
+    rec({ symbol: 'LOW', pickDate: '2026-11-10', score: 10 }),
+    rec({ symbol: 'HIGH', pickDate: '2026-11-10', score: 90 }),
+    rec({ symbol: 'MID', pickDate: '2026-11-10', score: 50 }),
+  ];
+  const n = N.createNotifier(
+    { tracker: trackerStub(recs), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const msg = n.preview('2026-11-20').messages[0];
+  const iHigh = msg.indexOf('HIGH');
+  const iMid = msg.indexOf('MID');
+  const iLow = msg.indexOf('LOW');
+  assert.ok(iHigh < iMid && iMid < iLow,
+    `排序應為 HIGH→MID→LOW，實際位置 ${iHigh}/${iMid}/${iLow}`);
+});
+
+ok('等待買入超過上限時只列前幾檔，並交代還有幾檔未列出', async () => {
+  const tg = tgStub();
+  const recs = [];
+  for (let i = 0; i < 15; i += 1) {
+    recs.push(rec({ symbol: `P${i}`, pickDate: '2026-11-10', score: 100 - i }));
+  }
+  const n = N.createNotifier(
+    { tracker: trackerStub(recs), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00'), maxPending: 12 },
+  );
+  const msg = n.preview('2026-11-20').messages[0];
+
+  // 標題要看得出總數與被省略的數量，否則使用者以為只有 12 檔
+  assert.ok(msg.includes('（15 檔，另有 3 檔未列出）'), `標題應交代省略數量：${msg}`);
+  // 前 12 檔要列出，後 3 檔不列
+  for (let i = 0; i < 12; i += 1) assert.ok(msg.includes(`P${i}`), `應列出 P${i}`);
+  for (let i = 12; i < 15; i += 1) assert.ok(!msg.includes(`P${i}`), `不應列出 P${i}`);
+});
+
+ok('等待買入的公司名要轉義（否則整則訊息 400 送不出去）', async () => {
+  const tg = tgStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([rec({ symbol: 'T', name: 'AT&T <holdings>', pickDate: '2026-11-10' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const msg = n.preview('2026-11-20').messages[0];
+  assert.ok(msg.includes('AT&amp;T'), `& 應轉義：${msg}`);
+  assert.ok(msg.includes('&lt;holdings&gt;'), `< > 應轉義：${msg}`);
+  assert.ok(!msg.includes('AT&T <'), '不應留下未轉義的原字串');
+});
+
+ok('preview 帶出會畫圖的股票清單（讓使用者知道會收到幾張圖）', async () => {
+  const tg = tgStub();
+  const recs = [
+    holding({ symbol: 'HELD', pickDate: '2026-11-10' }),
+    rec({ symbol: 'NEW', pickDate: '2026-11-20' }),
+    rec({ symbol: 'WAIT', pickDate: '2026-11-10' }),   // 等待買入 → 不畫圖
+  ];
+  const n = N.createNotifier(
+    { tracker: trackerStub(recs), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const pv = n.preview('2026-11-20');
+  assert.deepStrictEqual(
+    pv.chartTargets.map((t) => t.symbol),
+    ['HELD', 'NEW'],
+    '只畫持倉與今日新推介，等待買入不畫；持倉優先',
+  );
+  assert.deepStrictEqual(pv.chartTargets.map((t) => t.tag), ['持倉', '新推介']);
+});
+
+ok('chartTargets 對同一檔去重（防禦性：帳本重複或未來放寬分組時不會發兩張）', async () => {
+  const tg = tgStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ pickDate: '2026-11-10' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+
+  /* 這個去重目前走不到：positionRows 要求 pickDate !== dateKey，
+     todayRows 要求 ===，兩邊天生互斥，所以 assemble() 不會產出重疊的料。
+     但它仍是必要的防禦——帳本裡同一檔被記兩次（重跑、人工補資料）
+     就會同時出現在兩邊。因此直接餵重疊的 built 給 chartTargets 驗證合約，
+     而不是靠 assemble() 的輸出（那樣測到的是分組，不是去重）。 */
+  const dupHolding = holding({ symbol: 'DUP', pickDate: '2026-11-10' });
+  const dupToday = rec({ symbol: 'DUP', pickDate: '2026-11-20' });
+  const targets = n.chartTargets({
+    positionRows: [dupHolding],
+    todayRows: [dupToday],
+    pendingRows: [],
+  });
+
+  assert.strictEqual(targets.length, 1, `同一檔只該畫一次，實際 ${targets.length}`);
+  assert.strictEqual(targets[0].record.symbol, 'DUP');
+  assert.strictEqual(targets[0].tag, '持倉', '持倉優先，標籤應為持倉');
+});
+
+ok('assemble 的分組天生互斥（持倉與今日新推介不會重疊）', async () => {
+  const tg = tgStub();
+  // 今天建立且已成交 → 只算今日新推介；不能同時被當成持倉
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'TODAY', pickDate: '2026-11-20' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const built = n.assemble('2026-11-20');
+  assert.deepStrictEqual(built.todayRows.map((r) => r.symbol), ['TODAY']);
+  assert.deepStrictEqual(built.positionRows.map((r) => r.symbol), []);
+});
+
+ok('maxCharts 上限生效（避免一次跳十幾則通知）', async () => {
+  const tg = tgStub();
+  const recs = [];
+  for (let i = 0; i < 9; i += 1) {
+    recs.push(holding({ symbol: `H${i}`, pickDate: '2026-11-10' }));
+  }
+  const n = N.createNotifier(
+    { tracker: trackerStub(recs), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00'), maxCharts: 3 },
+  );
+  assert.strictEqual(n.preview('2026-11-20').chartTargets.length, 3);
+});
+
+ok('maxCharts=0 時完全不畫圖', async () => {
+  const tg = tgStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ pickDate: '2026-11-10' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00'), maxCharts: 0 },
+  );
+  assert.strictEqual(n.preview('2026-11-20').chartTargets.length, 0);
 });
 
 ok('持倉段落按損益由高到低排序', async () => {
@@ -616,6 +780,223 @@ ok('push 結果帶出本日新推介與持倉清單', async () => {
   assert.deepStrictEqual(r.newPicks, ['NEW']);
   assert.deepStrictEqual(r.positions, ['HELD']);
   assert.strictEqual(r.dateKey, '2026-11-20');
+});
+
+/* ── ⑦ K 線圖推送 ─────────────────────────────────────── */
+
+console.log('\n[7] K 線圖推送\n');
+
+/** 帶 sendPhoto 的 telegram stub */
+function tgPhotoStub(opts) {
+  const o = opts || {};
+  const t = tgStub(opts);
+  t.photos = [];
+  t.sendPhoto = async (png, caption) => {
+    t.photos.push({ png, caption });
+    if (o.failPhoto) return { ok: false, mode: 'error', error: o.failPhoto };
+    return { ok: true, mode: 'captured' };
+  };
+  return t;
+}
+
+/** 假的行情來源：回傳一段遞增的 K 線 */
+function dsStub(opts) {
+  const o = opts || {};
+  return {
+    calls: [],
+    async chart(symbol, range, interval) {
+      this.calls.push({ symbol, range, interval });
+      if (o.fail) throw new Error(o.fail);
+      if (o.empty) return { candles: [] };
+      const n = o.bars || 30;
+      const candles = [];
+      for (let i = 0; i < n; i += 1) {
+        const base = 100 + i;
+        candles.push({
+          t: Date.parse('2026-09-01') + i * 86400000,
+          o: base,
+          h: base + 1,
+          l: base - 1,
+          c: base + 0.5,
+          v: 1000,
+        });
+      }
+      return { candles };
+    },
+  };
+}
+
+ok('有 datasource 時會為持倉股票發一張 K 線圖', async () => {
+  const tg = tgPhotoStub();
+  const ds = dsStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: ds },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(tg.photos.length, 1, '應送出 1 張圖');
+  assert.strictEqual(r.charts.length, 1);
+  assert.strictEqual(r.charts[0].symbol, 'HELD');
+  assert.strictEqual(r.charts[0].ok, true);
+  assert.strictEqual(r.chartsOk, 1);
+  // 真的是 PNG（簽名正確），不是空 buffer
+  assert.strictEqual(tg.photos[0].png.slice(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.ok(r.charts[0].bytes > 1000, `圖應有合理大小，實際 ${r.charts[0].bytes}`);
+});
+
+ok('圖說只放關鍵價位，且不超過 Telegram 的 1024 上限', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    {
+      tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10', name: 'A'.repeat(200) })]),
+      telegram: tg,
+      datasource: dsStub(),
+    },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  await n.push({});
+  const cap = tg.photos[0].caption;
+  assert.ok(cap.includes('買區'), `圖說應有買區：${cap}`);
+  assert.ok(cap.includes('止賺'), `圖說應有止賺：${cap}`);
+  assert.ok(cap.includes('止蝕'), `圖說應有止蝕：${cap}`);
+  assert.ok(cap.length <= 1024, `圖說不得超過 1024 字，實際 ${cap.length}`);
+});
+
+ok('畫圖失敗不讓整天推送失敗（否則隔天會重推文字）', async () => {
+  const tg = tgPhotoStub();
+  const ds = dsStub({ fail: '行情 API 掛了' });
+  const stateFile = tmpState();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: ds },
+    { stateFile, nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+
+  assert.strictEqual(r.ok, true, '文字送達就算成功，不該因畫圖失敗而 ok:false');
+  assert.strictEqual(r.chartsOk, 0);
+  assert.strictEqual(r.charts[0].ok, false);
+  assert.ok(/行情 API 掛了/.test(r.charts[0].error), `應保留失敗原因：${r.charts[0].error}`);
+
+  // 關鍵：已標記已推。否則明天（同一發送日）會把文字再送一次
+  const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.ok(st.sent['2026-11-20'], '文字成功就應標記已推');
+});
+
+ok('sendPhoto 本身失敗也只記在 charts 裡，不影響 ok', async () => {
+  const tg = tgPhotoStub({ failPhoto: 'photo too large' });
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: dsStub() },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.charts[0].ok, false);
+  assert.strictEqual(r.charts[0].error, 'photo too large');
+});
+
+ok('文字就失敗時不發圖（省下無謂的失敗請求）', async () => {
+  const tg = tgPhotoStub({ failOn: () => 'token 失效' });
+  const ds = dsStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: ds },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(tg.photos.length, 0, '文字沒送出就不該發圖');
+  assert.strictEqual(ds.calls.length, 0, '也不該去抓行情');
+});
+
+ok('charts:false 可明確關閉附圖', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: dsStub() },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({ charts: false });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(tg.photos.length, 0);
+});
+
+ok('沒有注入 datasource 時照樣推送文字，只是不附圖', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+  assert.strictEqual(r.ok, true, '畫圖是加分項，不該因缺少行情來源而推送失敗');
+  assert.strictEqual(tg.photos.length, 0);
+  assert.strictEqual(r.chartsOk, 0);
+});
+
+ok('行情回空時不崩，只記錄查無資料', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: dsStub({ empty: true }) },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const r = await n.push({});
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.charts[0].ok, false);
+  assert.ok(/行情/.test(r.charts[0].error), r.charts[0].error);
+  assert.strictEqual(tg.photos.length, 0);
+});
+
+ok('chartFor 用對的參數抓行情（6mo / 1d）', async () => {
+  const tg = tgPhotoStub();
+  const ds = dsStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({ symbol: 'HELD', pickDate: '2026-11-10' })]), telegram: tg, datasource: ds },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  await n.push({});
+  assert.deepStrictEqual(ds.calls[0], { symbol: 'HELD', range: '6mo', interval: '1d' });
+});
+
+ok('K 線圖會畫上該檔的買區／止賺／止蝕參考線', async () => {
+  const tg = tgPhotoStub();
+  // K 線在 100~130 之間，參考線放在區間內才畫得出來
+  const r = holding({
+    symbol: 'HELD',
+    pickDate: '2026-11-10',
+    buyLow: 105,
+    buyHigh: 108,
+    stopPrice: 95,
+    targetPrice: 125,
+  });
+  const n = N.createNotifier(
+    { tracker: trackerStub([r]), telegram: tg, datasource: dsStub() },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  await n.push({});
+  // 用圖說確認參考線的數值有進到圖裡（圖說與圖共用同一組 pick）
+  const cap = tg.photos[0].caption;
+  assert.ok(cap.includes('105.00') && cap.includes('108.00'), `買區應為 105/108：${cap}`);
+  assert.ok(cap.includes('125.00'), `止賺應為 125：${cap}`);
+  assert.ok(cap.includes('95.00'), `止蝕應為 95：${cap}`);
+});
+
+ok('status 回報圖表設定（讓使用者知道會收幾張圖）', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({})]), telegram: tg, datasource: dsStub() },
+    { stateFile: tmpState(), maxCharts: 4, chartBars: 45, nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  const s = n.status();
+  assert.strictEqual(s.charts.enabled, true);
+  assert.strictEqual(s.charts.maxCharts, 4);
+  assert.strictEqual(s.charts.bars, 45);
+});
+
+ok('沒有 datasource 時 status 說圖表未啟用', async () => {
+  const tg = tgPhotoStub();
+  const n = N.createNotifier(
+    { tracker: trackerStub([holding({})]), telegram: tg },
+    { stateFile: tmpState(), nowFn: () => Date.parse('2026-11-20T10:00:00+08:00') },
+  );
+  assert.strictEqual(n.status().charts.enabled, false);
 });
 
 /* ── 執行 ────────────────────────────────────────────── */

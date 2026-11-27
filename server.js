@@ -89,6 +89,8 @@ const trackerTracker = picksTracker;   // 供 STATUS_LABEL 等常數使用
 const trackerNotifier = trackerNotify.createNotifier({
   tracker: trackerStore,
   telegram,
+  // datasource 用來抓 K 線畫圖；沒有它也能推送，只是不附圖
+  datasource,
 });
 
 const trackerJob = trackerJobMod.createJob({
