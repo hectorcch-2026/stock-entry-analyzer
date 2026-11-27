@@ -1201,6 +1201,78 @@ await check('K4 圖表刻度標籤放大後不重疊', async () => {
   }
 });
 
+await check('K5 降級路徑（模組不可用）也不得有小於 12.5px 的文字', async () => {
+  /* 為什麼要單獨驗降級路徑：
+     第一次修完在本機全綠，部署後線上卻抓到 .adv-na-hint 仍是 12px。
+     原因是那個元素只在「上游資料不可用」時才渲染——本機 happy path
+     永遠碰不到它，只有線上（上游 503）才會出現。
+
+     這一類「只在失敗時才顯示」的元素是最容易漏的：使用者真正需要
+     看清楚的時候（出錯了、要判斷怎麼辦），字反而最小。
+
+     做法：攔截 /api/analyze 並改寫回應，把進階模組全標為不可用，
+     不讓請求真的失敗（否則整個 #result 會 hidden，分頁根本看不到）。 */
+  const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await m.route('**/api/analyze**', async (route) => {
+      const resp = await route.fetch();
+      let json;
+      try { json = await resp.json(); } catch { return route.fulfill({ response: resp }); }
+      const at = json.advancedTools;
+      if (at && Array.isArray(at.modules)) {
+        at.modules = at.modules.map((mod) => Object.assign({}, mod, {
+          available: false,
+          blocked: true,
+          hint: '此模組需要期權鏈資料，目前上游未提供。可改用券商平台查看。',
+          reason: '上游資料來源未回傳此標的的期權鏈，因此無法計算。',
+        }));
+        at.availableCount = 0;
+        at.totalCount = at.modules.length;
+      }
+      await route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify(json),
+      });
+    });
+
+    await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await m.waitForTimeout(8000);
+
+    let found = [];
+    for (const tab of ['decision', 'tech', 'fund', 'news']) {
+      const btn = await m.$('.sub-tab[data-tab="' + tab + '"]');
+      if (!btn) continue;
+      await btn.click();
+      await m.waitForTimeout(1000);
+      const small = await m.evaluate((t) => {
+        const panel = document.getElementById('panel-' + t);
+        if (!panel || panel.hidden) return [];
+        const out = [];
+        panel.querySelectorAll('*').forEach((el) => {
+          const d = Array.from(el.childNodes).filter((n) => n.nodeType === 3)
+            .map((n) => n.textContent.trim()).join('');
+          if (d.length < 2) return;
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) return;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || cs.display === 'none') return;
+          if (cs.position === 'absolute') return;
+          const fs = parseFloat(cs.fontSize);
+          if (fs >= 12.5) return;
+          out.push({ fs, cls: (el.getAttribute('class') || '') || '<' + el.tagName.toLowerCase() + '>', text: d.slice(0, 18) });
+        });
+        return out;
+      }, tab);
+      found = found.concat(small.map((s) => Object.assign({ tab }, s)));
+    }
+
+    ok(found.length === 0,
+      `降級路徑仍有 ${found.length} 處小字：` +
+      found.slice(0, 5).map((s) => `${s.tab}/${s.fs}px .${s.cls}「${s.text}」`).join('、'));
+  } finally {
+    await m.close();
+  }
+});
+
 /* ------------------------------------------------------------ */
 
 console.log(`\n${'='.repeat(50)}`);
