@@ -51,7 +51,7 @@
 //          macro.js / styles.css。不升版的話舊 shell 會繼續供應沒有
 //          <script src="/macro-charts.js"> 的 index.html，
 //          結果就是區塊永遠停在「載入中…」——而且 console 不會有錯誤。
-const VERSION = 'v1.0.15';
+const VERSION = 'v1.0.16';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
@@ -67,6 +67,7 @@ const SHELL_ASSETS = [
   '/app.js',
   '/common.js',
   '/screen.js',
+  '/tracker.js',
   '/macro.js',
   '/macro-charts.js',
   '/rrg-client.js',

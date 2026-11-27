@@ -3977,3 +3977,440 @@ div.fomc-next {
     font-size: 12.5px;
   }
 }
+
+/* ===================================================
+   每日精選推介追蹤（#/tracker）
+   ---------------------------------------------------
+   放在檔案最末：本專案既有的行動端覆寫（@media 640px）
+   也寫在檔案末段，同特異度時後者勝出，因此新元件的桌機樣式
+   必須排在它們之後，行動端覆寫才有辦法再疊上去。
+   =================================================== */
+
+/* ---------- 累計盈虧摘要 ---------- */
+.tr-summary {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) 1fr;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.tr-sum-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.tr-sum-k { font-size: 13px; color: var(--text-3); }
+.tr-sum-v {
+  font-family: var(--mono);
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -.4px;
+  line-height: 1.15;
+}
+.tr-sum-sub { font-size: 13px; color: var(--text-3); min-height: 18px; }
+
+.tr-sum-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.tr-sum-grid li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.tr-g-k { font-size: 13px; color: var(--text-3); }
+.tr-g-v {
+  font-family: var(--mono);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tr-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+
+/* ---------- 篩選列 ---------- */
+.tr-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tr-status-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tr-st-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  min-height: 36px;
+}
+.tr-st-tab:hover { background: var(--brand-soft); border-color: var(--brand); }
+.tr-st-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.tr-st-tab.is-active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+.tr-st-n {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(16, 24, 40, .07);
+  color: inherit;
+}
+.tr-st-tab.is-active .tr-st-n { background: rgba(255, 255, 255, .24); }
+
+.tr-filter-note {
+  margin: 11px 0 0;
+  font-size: 13px;
+  color: var(--text-3);
+  line-height: 1.65;
+}
+
+/* ---------- 清單表格 ---------- */
+.tr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  /* 欄位多（12 欄），狹窄時橫向捲動，不要在儲存格內擠成多行 */
+  min-width: 980px;
+}
+.tr-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.tr-table thead th.num { text-align: right; }
+.tr-table tbody td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.tr-table tbody tr:last-child td { border-bottom: none; }
+.tr-table tbody tr:hover { background: var(--brand-soft); }
+.tr-table td.num {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.tr-sym { min-width: 150px; }
+.tr-sym-code {
+  display: block;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.tr-sym-name {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.45;
+  margin-top: 2px;
+  /* 名稱可能很長（例如 "China Resources Beer (Holdings) Company Limited"） */
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-cur {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+.tr-date { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+
+/* 成交價小字：讓使用者一眼分辨「建議區間」與「真的成交在哪」 */
+.tr-entry {
+  display: block;
+  font-size: 12.5px;
+  color: var(--brand);
+  font-weight: 600;
+  margin-top: 2px;
+}
+/* 浮動損益標記：未實現的數字必須與已實現區分 */
+.tr-float {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* 止賺／止蝕價的顏色。
+   刻意不用 --down（#0f9d58，白底只有 3.51:1，低於 AA 4.5:1）：
+   止蝕價正是使用者要盯的關鍵數字，看不清就失去意義。
+   改用專案既有的深綠 #0b7a44（5.41:1）。--down 是全域變數，
+   動它會影響其他頁面，因此只在這裡覆寫。 */
+.tr-tp { color: var(--up); }
+.tr-sl { color: #0b7a44; }
+
+/* ---------- 狀態徽章 ---------- */
+.tr-state { white-space: nowrap; }
+.tr-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tr-b-pending {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+.tr-b-holding {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: #c7d8fb;
+}
+.tr-b-target {
+  background: var(--up-soft);
+  color: var(--up);
+  border-color: #f6c9c9;
+}
+.tr-b-stop {
+  background: var(--down-soft);
+  color: #0b7a44;
+  border-color: #b7e5cf;
+}
+
+/* ---------- 空狀態 / 載入 / 表格內提示 ---------- */
+.tr-empty {
+  padding: 30px 18px;
+  text-align: center;
+}
+.te-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.te-body {
+  margin: 0 auto 16px;
+  max-width: 560px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.75;
+}
+.te-actions { display: flex; justify-content: center; gap: 9px; }
+
+.tr-loading { padding: 18px 4px; }
+.tr-loading .skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef2f7 25%, #f7f9fc 37%, #eef2f7 63%);
+  background-size: 400% 100%;
+  animation: tr-shimmer 1.3s ease-in-out infinite;
+  margin-bottom: 10px;
+}
+.tr-loading .skeleton-line.w40 { width: 40%; }
+.tr-loading .skeleton-line.w70 { width: 70%; }
+@keyframes tr-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.tr-none {
+  padding: 26px 10px !important;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* ---------- 計算說明 ---------- */
+.tr-explain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.tr-explain li {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border);
+}
+.tr-explain li:last-child { border-bottom: none; padding-bottom: 0; }
+.tr-e-k {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  padding-top: 1px;
+}
+.tr-e-v {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.78;
+}
+.tr-e-v strong { color: var(--text); }
+
+/* ===================================================
+   行動端（≤640px）
+   與本專案既有行動端策略一致：先讓內容可讀、可點，
+   再談密度。表格允許橫向捲動（.table-wrap 已有 overflow-x），
+   但字級不得小於 12.5px，觸控目標不得小於 40px。
+   =================================================== */
+@media (max-width: 640px) {
+  .tr-summary {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .tr-sum-main { padding: 14px 15px; }
+  .tr-sum-v { font-size: 22px; }
+  .tr-sum-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .tr-sum-grid li { padding: 10px 11px; }
+  .tr-g-k, .tr-sum-k, .tr-sum-sub, .tr-note { font-size: 13px; }
+  .tr-g-v { font-size: 14px; }
+
+  .tr-filter-row { gap: 10px; }
+  .tr-status-tabs {
+    width: 100%;
+    /* 五個狀態橫向排不進 390px，改成可橫向捲動而不是換行堆疊 */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tr-st-tab {
+    flex: 0 0 auto;
+    font-size: 13.5px;
+    padding: 9px 12px;
+    min-height: 40px;
+  }
+  .tr-st-tab.is-active { font-weight: 700; }
+  .tr-st-n { font-size: 12.5px; }
+  .tr-filter-note { font-size: 13px; }
+
+  .tr-sym-name { max-width: 150px; font-size: 12.5px; }
+  .tr-table thead th { font-size: 12.5px; }
+  .tr-table tbody td { padding: 9px; }
+  .tr-table td.num { font-size: 13px; }
+  .tr-entry, .tr-float { font-size: 12.5px; }
+  .tr-badge { font-size: 12.5px; padding: 4px 9px; }
+
+  .te-title { font-size: 15.5px; }
+  .te-body { font-size: 13.5px; }
+  .tr-none { font-size: 13px; }
+
+  .tr-explain li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .tr-e-k { font-size: 13px; }
+  .tr-e-v { font-size: 13.5px; }
+}
+
+/* 本頁的 .badge（右上角狀態標籤）字級覆寫。
+   全域 .badge 是 11.5px——它出現在許多頁面的角落，屬於既有設計。
+   但本頁的徽章顯示「資料已載入」「10 筆」這種**需要讀懂**的資訊，
+   不是純裝飾，因此只在本頁拉到 12.5px，不動全域定義。 */
+.tr-summary-card .badge,
+.tr-list-card .badge {
+  font-size: 12.5px;
+  padding: 2px 8px;
+}
+
+/* ===================================================
+   主導航在行動端改為換行（不橫向捲動）
+   ---------------------------------------------------
+   加入「推介追蹤」後，五個項目在 390px 需要 437px，
+   而可用寬度只有 364px。原本容器是 overflow-x:auto 且
+   scrollbar-width:none——捲軸被藏起來，使用者不會知道
+   右邊還有「版塊輪動」，等同於功能消失。這與 round 4
+   分頁溢出的問題是同一類，因此這裡不重複那個做法。
+
+   改為換行：容器不再是膠囊，每個項目自帶底色。
+   好處是所有項目永遠可見，代價是佔用兩行高度。
+   =================================================== */
+@media (max-width: 640px) {
+  .main-nav {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    overflow-x: visible;
+    border-radius: 0;
+  }
+  .nav-item {
+    white-space: nowrap;
+    padding: 7px 13px;
+    font-size: 13px;
+    min-height: 38px;
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+  }
+  .nav-item.active {
+    background: var(--brand);
+    color: #fff;
+    border-color: var(--brand);
+    box-shadow: none;
+  }
+  .nav-item.nav-detail {
+    color: var(--brand);
+    border-color: var(--brand);
+  }
+  .nav-item.nav-detail.active {
+    background: var(--brand);
+    color: #fff;
+  }
+}

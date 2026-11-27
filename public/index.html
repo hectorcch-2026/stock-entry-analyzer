@@ -40,10 +40,11 @@
       </div>
     </div>
 
-    <!-- 四頁導航：K 線預測 / AI 選股 / 宏觀與基本面 /（詳情頁時才出現「詳情」） -->
+    <!-- 導航：K 線預測 / AI 選股 / 推介追蹤 / 宏觀與基本面 / 版塊輪動 /（詳情頁時才出現「詳情」） -->
     <nav class="main-nav" id="mainNav" aria-label="主要頁面">
       <a href="#/predict" data-route="predict" class="nav-item active">K 線預測</a>
       <a href="#/screen" data-route="screen" class="nav-item">AI 選股</a>
+      <a href="#/tracker" data-route="tracker" class="nav-item">推介追蹤</a>
       <a href="#/macro" data-route="macro" class="nav-item">宏觀與基本面</a>
       <a href="#/rrg" data-route="rrg" class="nav-item">版塊輪動</a>
       <a href="#/predict" data-route="detail" class="nav-item nav-detail" hidden>個股詳情</a>
@@ -889,6 +890,169 @@
 
   </div><!-- /#viewScreen -->
 
+  <!-- ============ 檢視二之二：每日精選推介追蹤 ============ -->
+  <div id="viewTracker" hidden>
+
+    <!-- 累計盈虧摘要 -->
+    <section class="card tr-summary-card" aria-label="累計盈虧摘要">
+      <header class="card-head">
+        <h2>累計盈虧</h2>
+        <span class="badge badge-neutral" id="trUpdatedAt">—</span>
+      </header>
+
+      <div class="tr-summary" id="trSummary">
+        <div class="tr-sum-main">
+          <span class="tr-sum-k">總損益（美元）</span>
+          <strong class="tr-sum-v" id="trTotalPnl">—</strong>
+          <span class="tr-sum-sub" id="trReturnPct">—</span>
+        </div>
+        <ul class="tr-sum-grid">
+          <li><span class="tr-g-k">已實現</span><span class="tr-g-v" id="trRealized">—</span></li>
+          <li><span class="tr-g-k">未實現</span><span class="tr-g-v" id="trUnrealized">—</span></li>
+          <li><span class="tr-g-k">勝率</span><span class="tr-g-v" id="trWinRate">—</span></li>
+          <li><span class="tr-g-k">平均持有</span><span class="tr-g-v" id="trAvgHold">—</span></li>
+          <li><span class="tr-g-k">已投入成本</span><span class="tr-g-v" id="trDeployed">—</span></li>
+          <li><span class="tr-g-k">交易筆數</span><span class="tr-g-v" id="trCounts">—</span></li>
+        </ul>
+      </div>
+
+      <p class="tr-note" id="trSumNote"></p>
+    </section>
+
+    <!-- 狀態篩選 -->
+    <section class="card tr-filter-card" aria-label="篩選推介記錄">
+      <div class="tr-filter-row">
+        <div class="tr-status-tabs" role="tablist" aria-label="狀態篩選">
+          <button type="button" class="tr-st-tab is-active" data-status="" role="tab" aria-selected="true">
+            全部 <span class="tr-st-n" id="trN-all">0</span>
+          </button>
+          <button type="button" class="tr-st-tab" data-status="pending" role="tab" aria-selected="false">
+            待買入 <span class="tr-st-n" id="trN-pending">0</span>
+          </button>
+          <button type="button" class="tr-st-tab" data-status="holding" role="tab" aria-selected="false">
+            持倉中 <span class="tr-st-n" id="trN-holding">0</span>
+          </button>
+          <button type="button" class="tr-st-tab" data-status="target_hit" role="tab" aria-selected="false">
+            已止賺 <span class="tr-st-n" id="trN-target_hit">0</span>
+          </button>
+          <button type="button" class="tr-st-tab" data-status="stop_hit" role="tab" aria-selected="false">
+            已止蝕 <span class="tr-st-n" id="trN-stop_hit">0</span>
+          </button>
+        </div>
+        <button type="button" id="trRefresh" class="ghost-btn tr-refresh">
+          <span class="btn-label">更新現價</span>
+          <span class="spinner" hidden></span>
+        </button>
+      </div>
+      <p class="tr-filter-note" id="trFilterNote"></p>
+    </section>
+
+    <!-- 推介記錄清單 -->
+    <section class="card tr-list-card" aria-label="推介記錄清單">
+      <header class="card-head">
+        <h2>推介記錄</h2>
+        <span class="badge badge-neutral" id="trListBadge">—</span>
+      </header>
+
+      <div class="tr-loading" id="trLoading" hidden aria-live="polite">
+        <div class="skeleton-line w40"></div>
+        <div class="skeleton-line w70"></div>
+        <p class="loading-text" id="trLoadingText">正在取得最新價格…</p>
+      </div>
+
+      <div class="tr-empty" id="trEmpty" hidden>
+        <p class="te-title">還沒有任何推介記錄</p>
+        <p class="te-body">
+          每個交易日收盤後，系統會自動篩出當日條件最佳的股票並建立記錄。
+          你可以先到「AI 選股」頁按「載入每日清單」，或直接按下方按鈕立即建立。
+        </p>
+        <div class="te-actions">
+          <button type="button" id="trBootBtn" class="primary-btn">
+            <span class="btn-label">立即建立今日推介</span>
+            <span class="spinner" hidden></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="trTableWrap" hidden>
+        <table class="tr-table">
+          <thead>
+            <tr>
+              <th class="tr-sym">代碼 / 名稱</th>
+              <th class="tr-date">推介日</th>
+              <th class="num">建議買入</th>
+              <th class="num">止賺</th>
+              <th class="num">止蝕</th>
+              <th class="num">成交價</th>
+              <th class="num">股數</th>
+              <th class="num">現價/出場</th>
+              <th class="num">損益（USD）</th>
+              <th class="num">回報率</th>
+              <th class="num">持有</th>
+              <th class="tr-state">狀態</th>
+            </tr>
+          </thead>
+          <tbody id="trBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 錯誤 -->
+    <section id="trError" class="error-card" hidden role="alert" aria-live="assertive">
+      <div class="error-head">
+        <span class="error-icon" aria-hidden="true">⚠️</span>
+        <strong id="trErrorTitle">載入推介記錄失敗</strong>
+      </div>
+      <p id="trErrorMessage" class="error-message"></p>
+      <p id="trErrorHint" class="error-hint"></p>
+      <div id="trErrorActions" class="error-actions"></div>
+    </section>
+
+    <!-- 計算說明 -->
+    <section class="card tr-explain-card" aria-label="計算方式說明">
+      <header class="card-head"><h2>這些數字怎麼算的</h2></header>
+      <ul class="tr-explain">
+        <li>
+          <span class="tr-e-k">本金</span>
+          <span class="tr-e-v">
+            每筆交易各自以 <strong id="trCapitalHint">10,000</strong> 美元計算，按<strong>實際成交價</strong>
+            換算股數（允許碎股）。港股以港元計價，會按成交當時的匯率折算成美元，
+            因此持有港股同時承擔匯率風險。
+          </span>
+        </li>
+        <li>
+          <span class="tr-e-k">成交判定</span>
+          <span class="tr-e-v">
+            以日線的最高／最低價判定是否觸價。買入採限價單模型：開盤即低於買區上沿則以開盤價成交，
+            否則以買區上沿成交；止賺／止蝕遇到跳空時，以當天開盤價成交。
+          </span>
+        </li>
+        <li>
+          <span class="tr-e-k">保守假設</span>
+          <span class="tr-e-v">
+            同一天內同時觸及止賺與止蝕時，日線無法判定先後，一律視為<strong>先觸及止蝕</strong>。
+            建倉當天不判定出場，因為日線分不清是「先買後跌」還是「先跌後買」。
+          </span>
+        </li>
+        <li>
+          <span class="tr-e-k">累計報酬率</span>
+          <span class="tr-e-v">
+            已實現損益總額 ÷ 已投入總成本。分母隨筆數累加（10 筆各 10,000 即 100,000），
+            不是固定除以 10,000——否則多筆交易的報酬率會被系統性放大。
+          </span>
+        </li>
+        <li>
+          <span class="tr-e-k">不重複計算</span>
+          <span class="tr-e-v">
+            同一交易日同一檔只會有一筆記錄；已結案（已止賺／已止蝕）的記錄永久凍結，不會被後續價格改寫。
+            仍持倉中的個股不會再開新的一筆，避免同一筆本金重複投入。
+          </span>
+        </li>
+      </ul>
+    </section>
+
+  </div><!-- /#viewTracker -->
+
   <!-- ============ 檢視三：宏觀與基本面 ============ -->
   <div id="viewMacro" hidden>
 
@@ -1366,6 +1530,7 @@
 <script src="/common.js"></script>
 <script src="/app.js"></script>
 <script src="/screen.js"></script>
+<script src="/tracker.js"></script>
 <script src="/macro.js"></script>
 <script src="/macro-charts.js"></script>
 <script src="/rrg-client.js"></script>

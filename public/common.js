@@ -152,6 +152,7 @@
     var parts = h.split('/').filter(Boolean);
     var head = parts[0];
     if (head === 'screen') return { name: 'screen', symbol: null };
+    if (head === 'tracker') return { name: 'tracker', symbol: null };
     if (head === 'rrg') return { name: 'rrg', symbol: null };
     if (head === 'macro') {
       return { name: 'macro', symbol: parts[1] ? decodeURIComponent(parts[1]) : null };
@@ -172,7 +173,7 @@
     });
   }
 
-  var handlers = { onPredict: null, onScreen: null, onMacro: null, onRrg: null, onDetail: null };
+  var handlers = { onPredict: null, onScreen: null, onTracker: null, onMacro: null, onRrg: null, onDetail: null };
 
   /** 由 app.js / screen.js / macro.js 註冊各自的進場處理 */
   SA.onRoute = function (map) {
@@ -189,10 +190,12 @@
   function showView(name) {
     var chart = document.getElementById('viewChart');
     var screen = document.getElementById('viewScreen');
+    var tracker = document.getElementById('viewTracker');
     var macro = document.getElementById('viewMacro');
     var rrgView = document.getElementById('viewRrg');
     if (chart) chart.hidden = name !== 'chart';
     if (screen) screen.hidden = name !== 'screen';
+    if (tracker) tracker.hidden = name !== 'tracker';
     if (macro) macro.hidden = name !== 'macro';
     if (rrgView) rrgView.hidden = name !== 'rrg';
   }
@@ -202,7 +205,8 @@
   function dispatch() {
     var r = parseHash();
     var view = r.name === 'screen' ? 'screen'
-      : (r.name === 'macro' ? 'macro' : (r.name === 'rrg' ? 'rrg' : 'chart'));
+      : (r.name === 'tracker' ? 'tracker'
+        : (r.name === 'macro' ? 'macro' : (r.name === 'rrg' ? 'rrg' : 'chart')));
     showView(view);
     setActiveNav(r.name);
     var sig = r.name + '|' + (r.symbol || '');
@@ -211,6 +215,7 @@
     lastDispatched = sig;
 
     if (r.name === 'screen' && handlers.onScreen) handlers.onScreen();
+    else if (r.name === 'tracker' && handlers.onTracker) handlers.onTracker();
     else if (r.name === 'macro' && handlers.onMacro) handlers.onMacro(r.symbol);
     else if (r.name === 'rrg' && handlers.onRrg) handlers.onRrg();
     else if (r.name === 'detail' && handlers.onDetail) handlers.onDetail(r.symbol);
