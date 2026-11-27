@@ -92,7 +92,19 @@
     ah.textContent = sum.avgHoldingDays == null ? '—' : fmt(sum.avgHoldingDays, 1) + ' 天';
     ah.className = 'tr-g-v';
 
-    $('trDeployed').textContent = 'US$' + fmt(sum.deployedUsd || 0, 0);
+    /**
+     * 顯示「目前還壓在場上的本金」＝ openCostUsd，不是 deployedUsd。
+     *
+     * deployedUsd 是**已結案**交易的成本，它只是已實現報酬率的分母。
+     * 這個格子原本寫 deployedUsd、標籤卻是「已投入成本」，於是
+     * 在「有一筆 10,000 美元持倉、但還沒有任何交易結案」的情況下，
+     * 摘要會出現「未實現 +556.53」卻同時顯示「已投入成本 US$0」——
+     * 同一張卡片裡自相矛盾，而且是最容易被追問的那一格。
+     *
+     * 沒有持倉時退回 deployedUsd，讓「已全部結案」時仍看得到投入規模。
+     */
+    var costShown = (sum.openCostUsd || 0) > 0 ? sum.openCostUsd : (sum.deployedUsd || 0);
+    $('trDeployed').textContent = 'US$' + fmt(costShown, 0);
     $('trCounts').textContent = (sum.counts.total || 0) + ' 筆'
       + (sum.counts.closed ? '（已結案 ' + sum.counts.closed + '）' : '');
 

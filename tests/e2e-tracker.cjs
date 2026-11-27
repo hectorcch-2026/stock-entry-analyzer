@@ -448,6 +448,25 @@ function ok(name, cond, detail) {
     ok('每筆建倉的名目金額 ≒ 10,000 美元', notionalBad.length === 0,
       notionalBad.length ? notionalBad.join('; ') : '(全部吻合)');
 
+    /**
+     * 摘要卡片不得自相矛盾：有未實現損益，就一定要有持倉成本。
+     *
+     * 這是線上確認抓到的真缺陷：`trDeployed` 綁的是 deployedUsd，
+     * 而 deployedUsd 只加總**已結案**的交易成本（它只是已實現報酬率的
+     * 分母）。於是「有一筆 10,000 美元持倉、但還沒有任何交易結案」時，
+     * 同一張卡片會顯示「未實現 +556.53」與「已投入成本 US$0」。
+     *
+     * 這種矛盾比數字算錯更難被發現——兩個數字各自都對，
+     * 只是放在一起講不通，而使用者只會問「那我到底投了多少錢」。
+     */
+    const hasOpenPnl = (sum.unrealizedPnlUsd || 0) !== 0 || (sum.openCostUsd || 0) > 0;
+    if (hasOpenPnl) {
+      const shownCost = parseFloat(String(dom.deployed).replace(/[^0-9.]/g, '')) || 0;
+      ok('有未實現損益時，「持倉成本」不得顯示 0',
+        shownCost > 0,
+        `unrealized=${sum.unrealizedPnlUsd} openCostUsd=${sum.openCostUsd} DOM=${dom.deployed}`);
+    }
+
     await verPage.close();
   }
 
