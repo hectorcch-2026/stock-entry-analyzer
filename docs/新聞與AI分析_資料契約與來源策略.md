@@ -218,6 +218,99 @@ GET /api/stock-news-ai?symbol=AAPL&days=7&limit=8&refresh=1
 `bodySummary`，並用不同的視覺標示「這則是讀過正文的」。`bodySummary` 為空
 有三種合理原因，前端要分別標示：付費牆、正文過短、正文主體不是這家公司。
 
+#### v1.6 新增回應欄位：關鍵字／觀點＋依據／結構化匯報
+
+對應需求：① 自動提煉關鍵字與主題；② 依關鍵字生成觀點並保留新聞依據；
+③ 以繁體中文產出含摘要／關鍵字／觀點／來源的結構化匯報。
+實作在 `lib/news-keywords.js`（①）與 `lib/news-viewpoints.js`（②③），
+**兩者都是純函式、無 I/O、無 LLM 依賴**，因此沒有金鑰時功能依然完整。
+
+```jsonc
+{
+  "keywords": {
+    "items": [
+      {
+        "id": "revenue",              // 概念 id；散詞為 "w:原文"
+        "label": "營收",              // 繁中標準標籤（散詞保留原文）
+        "cat": "financial|policy|product|market|risk|other",
+        "catLabel": "財務",
+        "kind": "concept|term",
+        "weight": 100,                // 1–100，整份清單正規化，最高者為 100
+        "df": 3,                      // 出現的新聞則數
+        "coverage": 0.3,
+        "docIndexes": [3, 5, 7]       // 1-based 新聞編號，追溯鏈的基礎
+      }
+    ],
+    "topics": [
+      { "cat": "financial", "catLabel": "財務",
+        "keywords": ["營收", "獲利"], "weight": 87 }   // weight 為組內平均，非加總
+    ],
+    "stats": { "docs": 10, "terms": 420, "concepts": 9 },
+    "line": "本次新聞主要圍繞營收、獲利、評等調整等 9 個關鍵字。"
+  },
+
+  "viewpoints": {
+    "views": [
+      {
+        "keywordId": "revenue",
+        "keyword": "營收",
+        "cat": "financial", "catLabel": "財務",
+        "weight": 100,
+        "dir": "upside|risk|watch",
+        "dirLabel": "偏正向",
+        "claim": "觀點（繁體中文）",
+        "mechanism": "為什麼重要：把新聞接到投資判斷的機制說明",
+        "caveat": "須留意：這條觀點最常被忽略的反面",
+        "dissentCount": 0,            // 方向相反的證據條數（0 代表共識）
+        "netPolarity": 4,
+        "evidenceCount": 2,
+        "evidence": [
+          {
+            "newsIndex": 3,           // 對應 news.items[2]
+            "title": "…", "publisher": "…", "link": "…", "ageText": "3 天前",
+            "quote": "從該則正文挑出的原句（最多 130 字）",
+            "weak": false,            // true 代表只是標題或與主題無關，正常不會出現
+            "polarity": "pos|neg|flat",
+            "quoteFromTitle": false
+          }
+        ]
+      }
+    ],
+    "stats": { "keywords": 9, "views": 6, "withEvidence": 6 }
+  },
+
+  "report": {
+    "title": "Apple Inc.（AAPL） 新聞分析匯報",
+    "summary": { "line": "…", "articleCount": 10, "generatedAt": "…" },
+    "keywords": { "count": 9, "items": […], "topics": […] },
+    "viewpoints": { "count": 6, "items": […] },
+    "sources": [                      // **只列被引用過的**，並標明支撐哪些觀點
+      { "newsIndex": 3, "title": "…", "publisher": "…",
+        "link": "…", "ageText": "…", "citedBy": ["營收", "獲利"] }
+    ],
+    "caveats": ["…"],
+    "blocks": ["summary", "keywords", "viewpoints", "sources"],
+    "text": "整份匯報的純文字版（供「複製全文」用，由後端產生）"
+  }
+}
+```
+
+**設計約定（違反會靜默出錯，已有測試鎖住）**
+
+| 約定 | 理由 |
+|---|---|
+| 同義詞必須併成一個 concept | 否則 `margin`／`gross margin`／`毛利率` 會各佔一格，前 12 名被同一件事佔滿 |
+| 未登錄的英文散詞，只有「形態像專有名詞」才顯示 | 三種大寫訊號全部失效（標題 Title Case、句首大寫、短語料統計失真），最後改用詞內大寫／全大寫縮寫／含數字判斷 |
+| `weight` 基準取整份清單最大值 | 概念與散詞用兩套公式計分，用 `out[0]` 當基準會算出 168 |
+| 引文必須真的存在於該則正文 | 防止「看起來有引用、其實是生成的」 |
+| 引文若主體是別家公司則丟棄 | 實測會引用到 "Verizon trades at 8.93x" 當「獲利」的依據 |
+| 沒有紮實引文就不產出該觀點 | 寧可少一條，也不要交付沒有依據的空殼 |
+| 找不到專屬骨架的關鍵字不產出觀點 | 通用模板只會講「這項主題被反覆提及」這種廢話 |
+| 摘要句由 `summarizeTopics` 單一來源產生 | 兩處各寫一次會漂移（實測一邊說 5 個、一邊列 9 個） |
+
+**新增端點參數**：無。沿用 `GET /api/stock-news-ai?symbol=&days=&limit=&mode=&bodies=1`。
+`mode=rule` 時這三個區塊照常產出（不受 LLM 影響）。
+
 ---
 
 
@@ -445,6 +538,16 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 | `newsAiList` | 新聞清單（每則含 AI 提煉的正文摘要） |
 | `newsAiProv` | 來源與時間範圍標註 |
 | `newsAiNote` | 降級／限制說明 |
+| `newsAiKwBlock` | **關鍵字與主題**區塊（v1.6 新增） |
+| `newsAiKwLine` | 一句話主題摘要 |
+| `newsAiKwChips` | 關鍵字標籤（標籤＋權重條＋類別） |
+| `newsAiTopicRows` | 主題分組列（財務／政策／產品／市場／風險） |
+| `newsAiVpBlock` | **由關鍵字衍生的觀點**區塊（v1.6 新增） |
+| `newsAiVpHint` | 觀點數與引用條數 |
+| `newsAiVpList` | 觀點卡（關鍵字／方向／觀點／為什麼重要／引文／須留意） |
+| `newsAiReportBlock` | **結構化匯報**區塊（v1.6 新增） |
+| `newsAiReport` | 匯報五個區段（一～五） |
+| `newsAiCopyReport` | 複製全文按鈕（純文字來自 `report.text`） |
 
 #### v1.5 個股頁結構：4 個子分頁
 
@@ -460,6 +563,44 @@ GET /api/sector-macro-ai?timeframe=weekly&window=1y&benchmark=SPY&trail=5&mode=a
 **面板必須用 `hidden` 屬性切換，不能只改 class。** 面板內含 Canvas，
 若用 `display:none` 以外的隱藏方式反覆切換，寬度會被算成 0，切回來時圖表空白。
 `tests/news-ai-unit.cjs` 的 K6 與 `scripts/verify-subtabs.mjs` 都鎖住這件事。
+
+#### v1.6 新聞卡的呈現順序與「依據」規則
+
+卡片由上到下（越往下越細）：
+
+| # | 區塊 | 回答的問題 |
+|---|---|---|
+| ① | 市場最在意（`newsAiFocus`） | 市場在爭什麼 |
+| ② | 關鍵字與主題（`newsAiKwBlock`） | 這批新聞在講哪幾件事 |
+| ③ | 由關鍵字衍生的觀點（`newsAiVpBlock`） | 所以呢？憑什麼這樣說 |
+| ④ | 結構化匯報（`newsAiReportBlock`） | 整份拿去用 |
+| ⑤ | 看好／看跌雙欄 | 逐條多空拆解 |
+| ⑥ | 基本面解讀 | 接回財報數字 |
+| ⑦ | 新聞清單 | 原文 |
+
+②③④ 是新需求的三塊，放在焦點之後、雙欄之前。順序不是隨意的：
+使用者讀新聞分析的追問路徑是「講什麼 → 所以呢 → 憑什麼 → 細節」，
+若把觀點放在雙欄之後，使用者會先看到一堆未經組織的要點，
+才被告知這些要點共同指向什麼。
+
+**「依據」的三條硬規則**（`lib/news-viewpoints.js`，測試 O3–O5 鎖住）
+
+1. **引文必須真的存在於該則正文**（去掉截斷省略號後取前 20 字比對）。
+   不是「語意相近」，是字串真的在裡面。
+2. **引文主體必須是本標的。** 句子若提到別家公司且沒提到本標的，直接淘汰。
+   實測踩到的三個例子：關鍵字「獲利」引用 `Verizon trades at 8.93x forward
+   earnings`；「營收」引用 `Talkie … generated 60% of MiniMax's revenue`；
+   「評等調整」引用 `18-plus age rating on the App Store`（`rating` 裸匹配）。
+   第三個是 regex 問題，前兩個需要主體判斷——兩者都必須處理。
+3. **沒有紮實引文就不產出該觀點。** 標題式引文（問句下標）不算依據。
+   代價是觀點數變少，但交付「有標題、沒內容」的空殼傷害更大。
+
+`rating` 概念的正則已改為需要限定詞（`analyst rating` / `stock rating` /
+`price target`），不再裸匹配 `rating`——否則應用程式的年齡分級會變成「評等調整」。
+
+**前端不得用紅綠表示新聞方向。** 紅綠在本站是股價漲跌語義，
+新聞正負面用藍（偏正向）／橘（偏風險）／灰（待觀察），且一律附文字標籤。
+`tests/news-ai-unit.cjs` 的 P4 會掃新增的 CSS 區段，確認沒用到 `--up` / `--down`。
 
 #### v1.5 新聞清單品質規則（皆有回歸測試）
 

@@ -583,11 +583,17 @@
         <!--
           資訊分層（依「從上到下、越往下越細」排）：
             ① 市場焦點一句話   —— 只看這句就知道市場在爭什麼
-            ② 看好／看跌 雙欄   —— 逐條要點，每點連回財務指標與原文
-            ③ 基本面解讀       —— 把上面兩欄接回財報數字
-            ④ 新聞清單         —— 每則的 AI 摘要，可點回原文
+            ② 關鍵字與主題     —— 這批新聞在講哪幾件事（需求 1）
+            ③ 衍生的觀點＋依據 —— 每個關鍵字給出觀點並附新聞原句（需求 2）
+            ④ 結構化匯報       —— 摘要／關鍵字／觀點／來源，可整份複製（需求 3）
+            ⑤ 看好／看跌 雙欄  —— 逐條要點，每點連回財務指標與原文
+            ⑥ 基本面解讀       —— 把上面兩欄接回財報數字
+            ⑦ 新聞清單         —— 每則的 AI 摘要，可點回原文
           刻意把「情緒量表」縮到標題列右側：它只是一個概括指標，
           不該佔掉第一屏的空間（原本它與摘要並排，把焦點擠到下面）。
+          ②③④ 是新需求的三塊，放在焦點之後、雙欄之前：
+          使用者先知道「講什麼」與「所以呢」，再看逐條多空拆解，
+          順序符合閱讀時的追問路徑（先結論、再細節、最後原文）。
         -->
         <!-- ① 市場焦點 -->
         <div class="news-ai-focus">
@@ -614,7 +620,34 @@
           </div>
         </div>
 
-        <!-- ② 看好／看跌 雙欄 -->
+        <!-- ② 關鍵字與主題（需求 1） -->
+        <div class="news-ai-block" id="newsAiKwBlock">
+          <h3 class="news-ai-h3">關鍵字與主題
+            <span class="news-ai-h3-hint" id="newsAiKwHint">自動從新聞標題與正文提煉，括號內為出現則數</span>
+          </h3>
+          <p class="news-ai-kw-line" id="newsAiKwLine">—</p>
+          <div class="news-ai-kw-chips" id="newsAiKwChips"></div>
+          <div class="news-ai-topic-rows" id="newsAiTopicRows"></div>
+        </div>
+
+        <!-- ③ 關鍵字生成的觀點與新聞依據（需求 2） -->
+        <div class="news-ai-block" id="newsAiVpBlock">
+          <h3 class="news-ai-h3">由關鍵字衍生的觀點
+            <span class="news-ai-h3-hint" id="newsAiVpHint">每條觀點都保留支撐它的新聞原句，可點回原文</span>
+          </h3>
+          <div class="news-ai-vp-list" id="newsAiVpList"></div>
+        </div>
+
+        <!-- ④ 結構化匯報（需求 3） -->
+        <div class="news-ai-block" id="newsAiReportBlock">
+          <h3 class="news-ai-h3">結構化匯報
+            <span class="news-ai-h3-hint">新聞摘要 · 關鍵字 · 相關觀點 · 資料來源</span>
+            <button type="button" class="ghost-btn news-ai-copy-btn" id="newsAiCopyReport">複製全文</button>
+          </h3>
+          <div class="news-ai-report" id="newsAiReport"></div>
+        </div>
+
+        <!-- ⑤ 看好／看跌 雙欄 -->
         <div class="news-ai-block">
           <h3 class="news-ai-h3">看好與看跌
             <span class="news-ai-h3-hint" id="newsAiSidesHint">依新聞要點分欄，每點標註對應財務指標</span>

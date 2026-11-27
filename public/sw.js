@@ -43,7 +43,11 @@
 //          / sw.js 標題皆有變動），且「個股財報」由宏觀模塊移至個股模塊
 //          （index.html / styles.css / common.js / macro.js / app.js 皆改，
 //          新增 stock-fin.js），必須升版否則舊殼會蓋掉新頁。
-const VERSION = 'v1.0.11';
+// v1.0.12：個股新聞分析新增「關鍵字與主題」「由關鍵字衍生的觀點（含新聞依據）」
+//          「結構化匯報」三塊（index.html / styles.css / news-ai.js 皆改），
+//          且 /api/stock-news-ai 回應多了 keywords / viewpoints / report 三個欄位。
+//          不升版的話，舊 Service Worker 會繼續供給沒有這三塊的舊 news-ai.js。
+const VERSION = 'v1.0.12';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

@@ -87,6 +87,19 @@ section('A 個股頁：區塊存在且畫得出來');
 await page.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForTimeout(6000);
 
+/* 必須先切到「新聞」分頁。
+   個股頁在 v1.5 改為 4 個子分頁後，新聞卡位於預設隱藏的 panel-news 裡；
+   不切過去時，卡片雖然「存在且有內容」，但 getBoundingClientRect 是 0×0，
+   於是 A2／C1 這種量尺寸的檢查會全部失敗。
+   這不是測試取巧——使用者真實路徑就是先點分頁，才看得到這張卡。 */
+async function goNewsTab(pg) {
+  const tab = await pg.$('#tab-news');
+  if (!tab) throw new Error('找不到 #tab-news（子分頁結構可能被改壞）');
+  await tab.click();
+  await pg.waitForTimeout(600);
+}
+await goNewsTab(page);
+
 await check('A1 卡片存在、可見、且沒有卡在載入中', async () => {
   const s = await waitCardSettled(page, 'newsAi');
   ok(s.body, '主體未顯示（可能一直停在載入中）');
@@ -320,8 +333,124 @@ await check('C8 版塊標籤（能取得時）或明確說明取不到', async (
     `既沒有版塊標籤也沒有說明原因（靜默缺失）：tags=${r.tags.slice(0, 60)}`);
 });
 
-section('D 來源與時間標註（需求明確要求）');
+section('D2 關鍵字／觀點＋依據／結構化匯報（需求 1–3）');
 
+await check('D2a 關鍵字區塊有標籤、權重條與主題分組', async () => {
+  const r = await page.evaluate(() => {
+    const block = document.getElementById('newsAiKwBlock');
+    const chips = [...document.querySelectorAll('.news-ai-kw')];
+    return {
+      visible: !!block && !block.hidden,
+      chips: chips.length,
+      /* 每個 chip 必須同時有標籤文字、類別、以及寬度 > 0 的權重條——
+         只有文字沒有條＝強度資訊消失，只有條沒有文字＝看不懂在比什麼 */
+      wellFormed: chips.filter((c) => {
+        const label = c.querySelector('.news-ai-kw-label');
+        const bar = c.querySelector('.news-ai-kw-bar > i');
+        const cat = c.querySelector('.news-ai-kw-cat');
+        if (!label || !label.textContent.trim()) return false;
+        if (!bar || bar.getBoundingClientRect().width <= 0) return false;
+        if (!cat || !cat.textContent.trim()) return false;
+        return true;
+      }).length,
+      topics: document.querySelectorAll('.news-ai-topic-row').length,
+      line: (document.getElementById('newsAiKwLine')?.textContent || '').trim(),
+    };
+  });
+  ok(r.visible, '關鍵字區塊未顯示');
+  ok(r.chips >= 2, `關鍵字只有 ${r.chips} 個，太少`);
+  ok(r.wellFormed === r.chips,
+    `有 ${r.chips - r.wellFormed} 個關鍵字缺少標籤／權重條／類別`);
+  ok(r.topics >= 1, '沒有主題分組列');
+  ok(r.line.length > 0 && r.line !== '—', '缺少一句話主題摘要');
+});
+
+await check('D2b 權重條寬度必須與權重成正比（不是全部同寬）', async () => {
+  const widths = await page.evaluate(() =>
+    [...document.querySelectorAll('.news-ai-kw-bar > i')]
+      .map((b) => Math.round(b.getBoundingClientRect().width)));
+  const uniq = [...new Set(widths)];
+  ok(widths.length >= 3, `權重條只有 ${widths.length} 條，無法比較`);
+  /* 全部同寬代表寬度沒綁到 weight，強度資訊等於沒有 */
+  ok(uniq.length >= 2,
+    `所有權重條寬度都一樣（${uniq.join(',')}），權重沒有生效`);
+});
+
+await check('D2c 每條觀點都有關鍵字、方向、以及至少 1 條引文（需求 2）', async () => {
+  const r = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('.news-ai-vp')];
+    return {
+      count: cards.length,
+      broken: cards.filter((c) => {
+        const kw = c.querySelector('.news-ai-vp-kw');
+        const dir = c.querySelector('.news-ai-vp-dir');
+        const claim = c.querySelector('.news-ai-vp-claim');
+        const quotes = c.querySelectorAll('.news-ai-vp-quote');
+        return !kw || !kw.textContent.trim()
+          || !dir || !dir.textContent.trim()
+          || !claim || !claim.textContent.trim()
+          || quotes.length === 0;
+      }).length,
+      /* 引文必須有實際長度，不能是空字串或只剩引號 */
+      emptyQuotes: [...document.querySelectorAll('.news-ai-vp-quote')]
+        .filter((q) => q.textContent.replace(/[「」\s]/g, '').length < 10).length,
+    };
+  });
+  ok(r.count >= 1, '沒有任何觀點卡');
+  ok(r.broken === 0, `有 ${r.broken} 條觀點缺少關鍵字／方向／引文`);
+  ok(r.emptyQuotes === 0, `有 ${r.emptyQuotes} 條引文是空的`);
+});
+
+await check('D2d 每條引文的編號都可點回原文，且編號與清單對得上', async () => {
+  const r = await page.evaluate(() => {
+    const idxs = [...document.querySelectorAll('.news-ai-vp-ev-idx a')]
+      .map((a) => ({ n: a.textContent.trim(), href: a.getAttribute('href') || '' }));
+    const listCount = document.querySelectorAll('#newsAiList > li').length;
+    return {
+      total: idxs.length,
+      bad: idxs.filter((x) => !/^#\d+$/.test(x.n) || !/^https?:/.test(x.href)).length,
+      over: idxs.filter((x) => parseInt(x.n.replace('#', ''), 10) > listCount).length,
+      listCount,
+    };
+  });
+  ok(r.total >= 1, '沒有任何可追溯的引文編號');
+  ok(r.bad === 0, `有 ${r.bad} 條引文的編號或連結格式不對`);
+  ok(r.over === 0,
+    `有 ${r.over} 條引文指向不存在的新聞（清單只有 ${r.listCount} 則）`);
+});
+
+await check('D2e 匯報必須含四個區段標題與來源連結', async () => {
+  const r = await page.evaluate(() => {
+    const block = document.getElementById('newsAiReportBlock');
+    const txt = (document.getElementById('newsAiReport')?.textContent || '').replace(/\s+/g, '');
+    return {
+      visible: !!block && !block.hidden,
+      txt,
+      secs: document.querySelectorAll('.news-ai-rep-sec').length,
+      srcLinks: [...document.querySelectorAll('.news-ai-rep-src li a')]
+        .filter((a) => /^https?:/.test(a.getAttribute('href') || '')).length,
+    };
+  });
+  ok(r.visible, '匯報區塊未顯示');
+  for (const h of ['新聞摘要', '關鍵字', '相關觀點', '資料來源']) {
+    ok(r.txt.includes(h), `匯報缺少「${h}」區段`);
+  }
+  ok(r.secs >= 4, `匯報只有 ${r.secs} 個區段`);
+  ok(r.srcLinks >= 1, '匯報的資料來源沒有可點的原始連結（不可追溯）');
+});
+
+await check('D2f 匯報純文字可複製，且含真正的內容（不是空字串）', async () => {
+  const t = await page.evaluate(() =>
+    (document.getElementById('newsAiCopyReport')?.getAttribute('data-report-text') || ''));
+  ok(t.length > 200, `可複製的純文字只有 ${t.length} 字，太短`);
+  for (const h of ['一、新聞摘要', '二、關鍵字', '三、相關觀點', '四、資料來源']) {
+    ok(t.includes(h), `純文字匯報缺少「${h}」`);
+  }
+  /* 必須真的引用到新聞，而不是只有標題框架 */
+  ok(/依據 #\d+/.test(t), '純文字匯報沒有引用任何新聞依據');
+});
+
+section('D 來源與時間標註（需求明確要求）');
 await check('D1 六個必要標註欄位都在畫面上', async () => {
   const t = await page.evaluate(() =>
     (document.getElementById('newsAiProv')?.textContent || '').replace(/\s+/g, ' '));
@@ -613,6 +742,7 @@ await check('H1 個股頁 390px：無溢出、量表與清單可讀', async () =
   await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
   await m.waitForTimeout(7000);
   await waitCardSettled(m, 'newsAi');
+  await goNewsTab(m);   // 同上：不切分頁量到的寬度是 0
 
   const r = await m.evaluate(() => {
     const card = document.getElementById('newsAiCard');

@@ -26,6 +26,8 @@ const llm = require('../lib/llm');
 const newsHub = require('../lib/news-hub');
 const aiAnalyst = require('../lib/ai-analyst');
 const smAi = require('../lib/sector-macro-ai');
+const newsKeywords = require('../lib/news-keywords');
+const newsViewpoints = require('../lib/news-viewpoints');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -1233,6 +1235,383 @@ t('M2 server 端必須提供足夠大的新聞池並帶上 subject', () => {
   assert.ok(/subject:\s*\{[\s\S]{0,140}symbol/.test(src),
     'enrichNews 呼叫必須傳 subject（含 symbol）');
   assert.ok(/limit:\s*10/.test(src), 'enrichNews 仍只回 10 則');
+});
+
+/* ============================================================
+   N 關鍵字提煉（需求 1）
+   ============================================================ */
+
+section('N 關鍵字提煉');
+
+t('N1 空輸入不得拋錯，且回傳固定結構', () => {
+  for (const bad of [null, undefined, [], 'x', 0]) {
+    const r = newsKeywords.extractKeywords(bad);
+    assert.ok(Array.isArray(r.keywords), 'keywords 必須是陣列');
+    assert.ok(Array.isArray(r.topics), 'topics 必須是陣列');
+    assert.ok(r.stats && typeof r.stats === 'object', 'stats 必須存在');
+  }
+});
+
+t('N2 同義詞必須併到同一個概念，不可各佔一個關鍵字格', () => {
+  /* 「毛利率」「gross margin」「margin」講的是同一件事。
+     若不合併，前 12 個關鍵字會被同一個概念的多種講法佔滿。 */
+  const arts = [];
+  for (let i = 0; i < 4; i++) {
+    arts.push({
+      title: `Apple margin story ${i}`,
+      body: 'The company reported gross margin expansion. Operating margin also improved.',
+    });
+  }
+  const r = newsKeywords.extractKeywords(arts);
+  const margins = r.keywords.filter((k) => k.id === 'margin');
+  assert.strictEqual(margins.length, 1, `margin 概念只能出現一次，實得 ${margins.length}`);
+  assert.strictEqual(margins[0].kind, 'concept', '應為 concept 類型');
+});
+
+t('N3 停用詞不得成為關鍵字', () => {
+  /* 實測三輪才清掉的填充詞。它們在財經新聞裡出現頻率極高，
+     但完全不具區分度——列在「關鍵字」裡等於沒給資訊。 */
+  const junk = ['investment', 'research', 'growth', 'strong', 'strategy', 'market', 'analysts'];
+  const arts = [];
+  for (let i = 0; i < 5; i++) {
+    arts.push({
+      title: `Strong growth strategy ${i}`,
+      body: 'Analysts and investors said the market research on investment strategy shows growth.',
+    });
+  }
+  const r = newsKeywords.extractKeywords(arts);
+  const labels = r.keywords.map((k) => String(k.label).toLowerCase());
+  for (const j of junk) {
+    assert.ok(!labels.includes(j), `關鍵字不應包含填充詞「${j}」`);
+  }
+});
+
+t('N4 權重必須落在 1–100，且最高者為 100', () => {
+  const arts = [];
+  for (let i = 0; i < 6; i++) {
+    arts.push({
+      title: `Apple revenue and margin report ${i}`,
+      body: 'Revenue grew while gross margin expanded. Guidance was raised and EPS beat estimates. '
+        + 'Analysts discussed valuation and cash flow in detail.',
+    });
+  }
+  const r = newsKeywords.extractKeywords(arts);
+  assert.ok(r.keywords.length > 0, '應產出關鍵字');
+  for (const k of r.keywords) {
+    assert.ok(k.weight >= 1 && k.weight <= 100, `權重必須在 1–100，實得 ${k.label}=${k.weight}`);
+  }
+  assert.strictEqual(r.keywords[0].weight, 100, '最高分者權重應為 100');
+});
+
+t('N5 只出現一則的詞不得入選（minDocs 門檻）', () => {
+  const arts = [
+    { title: 'Apple revenue beats', body: 'Revenue rose strongly.' },
+    { title: 'Apple margin expands', body: 'Margin expanded.' },
+    { title: 'Apple guidance raised', body: 'Guidance raised for the year.' },
+  ];
+  const r = newsKeywords.extractKeywords(arts, { minDocs: 2 });
+  for (const k of r.keywords) {
+    assert.ok(k.df >= 2, `「${k.label}」只出現在 ${k.df} 則，不應入選`);
+  }
+});
+
+t('N6 每個關鍵字必須帶 docIndexes（追溯鏈的基礎）', () => {
+  /* 沒有 docIndexes，就只能說「這個關鍵字重要」，
+     卻指不出是從哪幾則新聞看出來的——需求 2 的「依據」會斷鏈。 */
+  const arts = [];
+  for (let i = 0; i < 4; i++) {
+    arts.push({ title: `Apple revenue ${i}`, body: 'Revenue and margin both improved.' });
+  }
+  const r = newsKeywords.extractKeywords(arts);
+  for (const k of r.keywords) {
+    assert.ok(Array.isArray(k.docIndexes), `「${k.label}」缺 docIndexes`);
+    assert.ok(k.docIndexes.length > 0, `「${k.label}」的 docIndexes 不得為空`);
+    for (const i of k.docIndexes) {
+      assert.ok(Number.isInteger(i) && i >= 1 && i <= arts.length,
+        `docIndexes 必須是 1-based 且落在範圍內，實得 ${i}`);
+    }
+  }
+});
+
+t('N7 主題分組的重量必須是組內平均，不是加總', () => {
+  /* 加總會讓「關鍵字多的類別」永遠贏，即使每個都很弱。 */
+  const arts = [];
+  for (let i = 0; i < 5; i++) {
+    arts.push({
+      title: `Apple revenue margin earnings guidance ${i}`,
+      body: 'Revenue, margin, earnings and guidance were all discussed.',
+    });
+  }
+  const r = newsKeywords.extractKeywords(arts);
+  for (const tp of r.topics) {
+    if (!tp.keywords.length) continue;
+    const inGroup = r.keywords.filter((k) => k.cat === tp.cat);
+    const avg = Math.round(inGroup.reduce((s, k) => s + k.weight, 0) / inGroup.length);
+    assert.strictEqual(tp.weight, avg, `主題「${tp.catLabel}」重量應為平均 ${avg}，實得 ${tp.weight}`);
+  }
+});
+
+t('N8 summarizeTopics 的「等 N 個」必須等於實際關鍵字總數', () => {
+  /* 實測 bug：切片後才數長度，畫面列 9 個卻說「等 5 個」。
+     使用者一眼就看出前後矛盾。 */
+  const kws = [];
+  for (let i = 0; i < 9; i++) kws.push({ label: `K${i}`, cat: 'financial' });
+  const line = newsKeywords.summarizeTopics(kws, []);
+  assert.ok(line.includes('等 9 個關鍵字'), `應說「等 9 個」，實得：${line}`);
+});
+
+/* ============================================================
+   O 觀點與依據（需求 2）＋ 結構化匯報（需求 3）
+   ============================================================ */
+
+section('O 觀點與依據／結構化匯報');
+
+/** 造一批可預期的新聞（每則都有正文，且都提到 Apple） */
+function mkArticles() {
+  return [
+    {
+      title: 'Apple revenue beats expectations as iPhone sales surge',
+      publisher: 'Reuters',
+      link: 'https://example.com/1',
+      time: Date.now() - 3600000,
+      ageText: '1 小時前',
+      body: 'Apple reported revenue of $94.9 billion, beating estimates. '
+        + 'The company said iPhone sales surged 12% year over year. '
+        + 'Gross margin expanded to 46.2% on strong services growth. '
+        + 'Apple also raised its quarterly dividend and authorized a new buyback.',
+    },
+    {
+      title: 'Analysts downgrade Apple on valuation concerns',
+      publisher: 'Bloomberg',
+      link: 'https://example.com/2',
+      time: Date.now() - 7200000,
+      ageText: '2 小時前',
+      body: 'Several analysts downgraded Apple stock, citing valuation concerns. '
+        + 'Apple trades at 37x forward earnings, well above its historical average. '
+        + 'The company faces a regulatory probe in Europe over App Store policies. '
+        + 'Revenue growth is expected to slow next year, analysts said.',
+    },
+    {
+      title: 'Apple AI strategy questioned amid capex surge',
+      publisher: 'WSJ',
+      link: 'https://example.com/3',
+      time: Date.now() - 10800000,
+      ageText: '3 小時前',
+      body: 'Apple is spending heavily on AI data centers, raising questions about returns. '
+        + 'Capital expenditure rose sharply. Revenue from AI services remains small. '
+        + 'The company said it will provide guidance on AI monetization next quarter.',
+    },
+    {
+      title: 'Apple faces EU regulatory pressure on App Store',
+      publisher: 'FT',
+      link: 'https://example.com/4',
+      time: Date.now() - 14400000,
+      ageText: '4 小時前',
+      body: 'European regulators opened an investigation into Apple App Store rules. '
+        + 'The probe could result in fines of up to 10% of global revenue. '
+        + 'Apple said it complies with local laws and will cooperate with regulators.',
+    },
+  ];
+}
+
+t('O1 每個觀點都必須有 keyword / claim / evidence 三件套', () => {
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  assert.ok(vp.views.length > 0, '應產出至少一條觀點');
+  for (const v of vp.views) {
+    assert.ok(v.keyword, '觀點必須標明來自哪個關鍵字');
+    assert.ok(v.claim && v.claim.length > 6, '觀點必須有實質內容');
+    assert.ok(Array.isArray(v.evidence) && v.evidence.length > 0,
+      `觀點「${v.keyword}」沒有新聞依據`);
+    assert.ok(v.dir && v.dirLabel, '觀點必須標明方向');
+  }
+});
+
+t('O2 依據的 newsIndex 必須指回真實存在的新聞', () => {
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  for (const v of vp.views) {
+    for (const e of v.evidence) {
+      assert.ok(Number.isInteger(e.newsIndex) && e.newsIndex >= 1 && e.newsIndex <= arts.length,
+        `newsIndex=${e.newsIndex} 超出範圍 1..${arts.length}`);
+      const src = arts[e.newsIndex - 1];
+      assert.strictEqual(e.title, src.title, '依據的新聞標題必須與來源一致');
+    }
+  }
+});
+
+t('O3 引文必須是真的存在於該則正文（不得編造）', () => {
+  /* 這是防止「看起來有引用、其實是模型生成」的核心檢查。 */
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  for (const v of vp.views) {
+    for (const e of v.evidence) {
+      const body = arts[e.newsIndex - 1].body;
+      /* 去掉截斷省略號後，前 20 字必須能在正文中找到 */
+      const stem = String(e.quote).replace(/…$/, '').slice(0, 20);
+      assert.ok(body.indexOf(stem) >= 0,
+        `引文不在正文中：「${stem}」`);
+    }
+  }
+});
+
+t('O4 不得引用講別家公司的句子當依據', () => {
+  /* 實測踩到的坑：關鍵字「獲利」引用了
+     「Verizon trades at 8.93x forward earnings」——
+     句子命中 earnings，但主體是 Verizon。 */
+  const arts = [
+    {
+      title: 'Apple earnings preview',
+      publisher: 'X',
+      body: 'Verizon trades at a forward price-to-earnings ratio of 8.93, far below peers. '
+        + 'Apple earnings estimates have increased over the past 60 days. '
+        + 'Apple is expected to report earnings next week.',
+    },
+    {
+      title: 'Apple earnings estimates rise',
+      publisher: 'Y',
+      body: 'Apple earnings estimates rose 0.8% to $5.07. '
+        + 'The company will report earnings for the fourth quarter.',
+    },
+  ];
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  for (const v of vp.views) {
+    for (const e of v.evidence) {
+      assert.ok(!/verizon/i.test(e.quote),
+        `引文不得來自別家公司：「${e.quote.slice(0, 60)}」`);
+    }
+  }
+});
+
+t('O5 證據全為空時不得產出觀點', () => {
+  /* 寧可少一條觀點，也不要交付沒有依據的空殼。 */
+  const arts = [
+    { title: 'Apple news one', body: 'Nothing relevant here at all whatsoever.' },
+    { title: 'Apple news two', body: 'Completely unrelated filler text with no substance.' },
+  ];
+  const kw = newsKeywords.extractKeywords(arts, { minDocs: 1 });
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  for (const v of vp.views) {
+    assert.ok(v.evidence.length > 0, `觀點「${v.keyword}」不該在沒有依據時出現`);
+  }
+});
+
+t('O6 空輸入必須安全（回傳空結構，不拋錯）', () => {
+  for (const [a, k] of [[[], null], [null, null], [[], { keywords: [] }]]) {
+    const vp = newsViewpoints.buildViewpoints(a, k, {});
+    assert.deepStrictEqual(vp.views, []);
+  }
+  const rep = newsViewpoints.buildReport([], null, null, {});
+  assert.ok(rep.summary && rep.keywords && rep.viewpoints && rep.sources);
+  assert.ok(Array.isArray(rep.blocks));
+});
+
+t('O7 匯報必須包含四個區塊：摘要／關鍵字／觀點／來源', () => {
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  const rep = newsViewpoints.buildReport(arts, kw, vp, { symbol: 'AAPL', name: 'Apple' });
+  assert.deepStrictEqual(rep.blocks, ['summary', 'keywords', 'viewpoints', 'sources'],
+    '匯報區塊順序必須固定');
+  assert.ok(rep.summary.line.length > 0, 'summary.line 不得為空');
+  assert.ok(rep.keywords.items.length > 0, 'keywords.items 不得為空');
+  assert.ok(rep.viewpoints.items.length > 0, 'viewpoints.items 不得為空');
+  assert.ok(rep.sources.length > 0, 'sources 不得為空');
+});
+
+t('O8 sources 只列被引用過的新聞，且標明支撐哪些觀點', () => {
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  const rep = newsViewpoints.buildReport(arts, kw, vp, { symbol: 'AAPL', name: 'Apple' });
+  const citedIdx = new Set();
+  for (const v of vp.views) for (const e of v.evidence) citedIdx.add(e.newsIndex);
+  assert.strictEqual(rep.sources.length, citedIdx.size,
+    'sources 數量必須等於被引用的新聞數，不可把所有新聞都列上');
+  for (const s of rep.sources) {
+    assert.ok(s.citedBy.length > 0, `來源 #${s.newsIndex} 未標明支撐哪些觀點`);
+  }
+});
+
+t('O9 匯報純文字必須含全部四個區塊標題', () => {
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  const rep = newsViewpoints.buildReport(arts, kw, vp, { symbol: 'AAPL', name: 'Apple' });
+  const txt = newsViewpoints.reportToText(rep);
+  for (const h of ['一、新聞摘要', '二、關鍵字', '三、相關觀點', '四、資料來源']) {
+    assert.ok(txt.includes(h), `純文字匯報缺少「${h}」`);
+  }
+});
+
+t('O10 匯報與關鍵字區塊的主題句必須一致（同一份資料不得兩種說法）', () => {
+  /* 實測 bug：一邊說「等 5 個關鍵字」、另一邊列 9 個。 */
+  const arts = mkArticles();
+  const kw = newsKeywords.extractKeywords(arts);
+  const vp = newsViewpoints.buildViewpoints(arts, kw, { symbol: 'AAPL', name: 'Apple' });
+  const rep = newsViewpoints.buildReport(arts, kw, vp, { symbol: 'AAPL', name: 'Apple' });
+  const n = kw.keywords.length;
+  if (n > 3) {
+    assert.ok(rep.summary.line.includes(`等 ${n} 個`),
+      `匯報摘要應說「等 ${n} 個」，實得：${rep.summary.line}`);
+    const line = newsKeywords.summarizeTopics(kw.keywords, kw.topics);
+    assert.ok(line.includes(`等 ${n} 個`),
+      `關鍵字區塊應說「等 ${n} 個」，實得：${line}`);
+  }
+});
+
+/* ============================================================
+   P 前端呈現契約（新三塊）
+   ============================================================ */
+
+section('P 前端呈現契約（關鍵字／觀點／匯報）');
+
+t('P1 index.html 必須有六個新容器，且 viewport meta 不得被破壞', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+  for (const id of ['newsAiKwBlock', 'newsAiKwChips', 'newsAiKwLine',
+    'newsAiTopicRows', 'newsAiVpBlock', 'newsAiVpList',
+    'newsAiReportBlock', 'newsAiReport', 'newsAiCopyReport']) {
+    assert.ok(html.includes(`id="${id}"`), `缺少容器 #${id}`);
+  }
+});
+
+t('P2 news-ai.js 必須渲染三塊，且欄位名與後端一致', () => {
+  const js = fs.readFileSync(path.join(ROOT, 'public/news-ai.js'), 'utf8');
+  assert.ok(/renderKeywords\(d\.keywords\)/.test(js), '必須渲染 d.keywords');
+  assert.ok(/renderViewpoints\(d\.viewpoints\)/.test(js), '必須渲染 d.viewpoints');
+  assert.ok(/renderReport\(d\.report\)/.test(js), '必須渲染 d.report');
+  /* 欄位名錯一個字就會靜默顯示空白（本站已經踩過一次：publisherTier） */
+  for (const f of ['docIndexes', 'catLabel', 'dirLabel', 'evidence', 'quote', 'citedBy']) {
+    assert.ok(js.includes(f), `前端未使用後端欄位「${f}」`);
+  }
+});
+
+t('P3 新區塊在資料缺席時必須隱藏，不得留下空殼', () => {
+  const js = fs.readFileSync(path.join(ROOT, 'public/news-ai.js'), 'utf8');
+  /* 三個 render 函式都要有 block.hidden = true 的分支 */
+  const hiddenCount = (js.match(/block\.hidden = true/g) || []).length;
+  assert.ok(hiddenCount >= 3, `三個區塊都需有隱藏分支，實得 ${hiddenCount}`);
+});
+
+t('P4 前端不得用紅綠表示新聞方向（漲跌語義會被誤讀）', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8');
+  /* 只看新增的三塊樣式區段 */
+  const start = css.indexOf('.news-ai-kw-line');
+  const end = css.indexOf('/* ---------- ② 看好／看跌 雙欄');
+  assert.ok(start > 0 && end > start, '找不到新樣式區段');
+  const zone = css.slice(start, end);
+  assert.ok(!/var\(--up\)|var\(--down\)|--up-soft|--down-soft/.test(zone),
+    '新聞方向不得使用 --up／--down（那是股價漲跌色）');
+});
+
+t('P5 複製全文必須用後端算好的純文字，不在前端重拼', () => {
+  const js = fs.readFileSync(path.join(ROOT, 'public/news-ai.js'), 'utf8');
+  assert.ok(/data-report-text/.test(js), '必須把 report.text 帶進按鈕');
+  assert.ok(/rep\.text/.test(js), '必須讀取後端提供的純文字版本');
 });
 
 console.log('\n' + '='.repeat(56));

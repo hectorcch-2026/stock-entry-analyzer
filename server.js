@@ -51,6 +51,8 @@ const newsHub = require('./lib/news-hub');
 const aiAnalyst = require('./lib/ai-analyst');
 const articleFetch = require('./lib/article-fetch');
 const newsSides = require('./lib/news-sides');
+const newsKeywords = require('./lib/news-keywords');
+const newsViewpoints = require('./lib/news-viewpoints');
 const sectorMacroAi = require('./lib/sector-macro-ai');
 
 const PORT = process.env.PORT || 5177;
@@ -1452,6 +1454,48 @@ const server = http.createServer(async (req, res) => {
 
       const [out, sides] = await Promise.all([outP, sidesP]);
 
+      /* ------------------------------------------------------------
+         關鍵字 → 觀點 → 依據 → 結構化匯報
+         ------------------------------------------------------------
+         這一段是純計算（無 I/O、無 LLM），放在兩個 LLM 之後做，
+         成本是毫秒級，不影響整體延遲。
+         為什麼不等 LLM 回來才一起組：這兩層是**獨立**的，
+         規則層的關鍵字與觀點不依賴 LLM 的看好／看跌結果。
+         即使 LLM 完全失敗，這一塊仍然完整可用。
+         ------------------------------------------------------------ */
+      let keywords = { keywords: [], topics: [], stats: { docs: 0 } };
+      let viewpoints = { views: [], stats: { views: 0 } };
+      let report = null;
+      let reportText = '';
+      try {
+        keywords = newsKeywords.extractKeywords(newsItems, { max: 12 });
+        viewpoints = newsViewpoints.buildViewpoints(newsItems, keywords, {
+          symbol: norm.value,
+          name: name || ((analysis && analysis.meta && analysis.meta.name) || null),
+          shortName: (analysis && analysis.meta && analysis.meta.shortName) || null,
+          maxViews: 6,
+        });
+        report = newsViewpoints.buildReport(newsItems, keywords, viewpoints, {
+          symbol: norm.value,
+          name: name || ((analysis && analysis.meta && analysis.meta.name) || null),
+          window: { days, limit },
+        });
+        reportText = newsViewpoints.reportToText(report);
+      } catch (e) {
+        /* 這一層失敗不得影響既有功能：新聞、看好／看跌、AI 摘要都已經算好了。
+           但要留下痕跡，否則「關鍵字為空」會被誤認為「這批新聞沒有主題」。 */
+        report = {
+          title: '新聞分析匯報',
+          summary: { line: `匯報產生失敗：${e.message}`, articleCount: newsItems.length },
+          keywords: { count: 0, items: [], topics: [] },
+          viewpoints: { count: 0, items: [] },
+          sources: [],
+          caveats: [`關鍵字／觀點層失敗：${e.message}`],
+          blocks: [],
+        };
+        reportText = '';
+      }
+
       return sendJSON(res, 200, {
         ...out,
         /* 明確標示「價格脈絡是否可用」：AI 的研判若沒有價格數字支撐，
@@ -1463,6 +1507,17 @@ const server = http.createServer(async (req, res) => {
         news: { ...(out.news || {}), items: newsItems },
         bodies: bodyStats,
         sides,
+        /* 需求 1：自動提煉的關鍵字與主題 */
+        keywords: {
+          items: keywords.keywords,
+          topics: keywords.topics,
+          stats: keywords.stats,
+          line: newsKeywords.summarizeTopics(keywords.keywords, keywords.topics),
+        },
+        /* 需求 2：關鍵字 → 觀點 → 支撐該觀點的新聞依據 */
+        viewpoints,
+        /* 需求 3：繁體中文結構化匯報（含 summary／keywords／viewpoints／sources） */
+        report: { ...report, text: reportText },
       });
     }
 

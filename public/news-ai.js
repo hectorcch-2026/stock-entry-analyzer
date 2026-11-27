@@ -188,6 +188,15 @@
       focusEl.textContent = focusText;
     }
 
+    /* --- ② 關鍵字與主題（需求 1） --- */
+    renderKeywords(d.keywords);
+
+    /* --- ③ 由關鍵字衍生的觀點與依據（需求 2） --- */
+    renderViewpoints(d.viewpoints);
+
+    /* --- ④ 結構化匯報（需求 3） --- */
+    renderReport(d.report);
+
     /* --- ② 看好／看跌 雙欄 --- */
     if (sides) {
       renderSidesColumn($('newsAiBullList'), $('newsAiBullCount'), sides.bull, 'bull');
@@ -432,6 +441,318 @@
         ? '<b>限制與提示</b>' + notes.map(function (x) { return '· ' + x; }).join('<br>')
         : '';
       note.hidden = !notes.length;
+    }
+  }
+
+  /* ===================================================
+     需求 1–3：關鍵字 / 觀點＋依據 / 結構化匯報
+     ===================================================
+     這三塊刻意寫成獨立函式，且都有「資料缺席就整塊隱藏」的行為。
+     理由：後端若因任何原因沒給（舊版快取、上游失敗），
+     畫面不該出現三個空殼標題——那比不顯示更讓人困惑。
+     =================================================== */
+
+  /* 類別顏色：與看好／看跌的紅綠區隔（那是股價語義，這裡是新聞主題）。
+     沿用全站既有的 brand / warn / up / down 變數會混淆，
+     所以用四種中性偏冷的色階，只做「分組辨識」用。 */
+  var CAT_COLOR = {
+    financial: 'c-fin',
+    policy: 'c-pol',
+    product: 'c-pro',
+    market: 'c-mkt',
+    risk: 'c-risk',
+    other: 'c-oth',
+  };
+
+  function catCls(cat) { return CAT_COLOR[cat] || CAT_COLOR.other; }
+
+  /** ② 關鍵字與主題 */
+  function renderKeywords(kw) {
+    var block = $('newsAiKwBlock');
+    var chips = $('newsAiKwChips');
+    var lineEl = $('newsAiKwLine');
+    var rows = $('newsAiTopicRows');
+    if (!block) return;
+
+    var items = (kw && kw.items) || [];
+    var topics = (kw && kw.topics) || [];
+
+    /* 沒有關鍵字就整塊收起來。留著一個「—」的空區塊會讓使用者
+       以為功能壞了，實際上是這批新聞本來就沒有共同主題。 */
+    if (!items.length) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+
+    if (lineEl) lineEl.textContent = (kw && kw.line) || '—';
+
+    if (chips) {
+      var ch = '';
+      for (var i = 0; i < items.length; i++) {
+        var k = items[i];
+        /* 權重條用寬度表示，並在 title 裡帶出「出現在哪幾則」，
+           這樣不佔版面也能追溯。 */
+        var idxs = k.docIndexes || [];
+        var tip = esc(k.label) + '：出現在第 ' + idxs.join('、') + ' 則新聞（強度 '
+          + k.weight + '/100）';
+        ch += '<span class="news-ai-kw ' + catCls(k.cat) + '" title="' + tip + '"'
+          + ' data-kw="' + esc(k.label) + '">'
+          + '<b class="news-ai-kw-label">' + esc(k.label) + '</b>'
+          + '<span class="news-ai-kw-bar" aria-hidden="true">'
+          + '<i style="width:' + Math.max(4, Math.min(100, k.weight)) + '%"></i>'
+          + '</span>'
+          + '<span class="news-ai-kw-cat">' + esc(k.catLabel) + '</span>'
+          + '</span>';
+      }
+      chips.innerHTML = ch;
+    }
+
+    if (rows) {
+      var rh = '';
+      for (var t = 0; t < topics.length; t++) {
+        var tp = topics[t];
+        if (!tp.keywords || !tp.keywords.length) continue;
+        rh += '<div class="news-ai-topic-row">'
+          + '<span class="news-ai-topic-name ' + catCls(tp.cat) + '">' + esc(tp.catLabel) + '</span>'
+          + '<span class="news-ai-topic-bar" aria-hidden="true">'
+          + '<i style="width:' + Math.max(4, Math.min(100, tp.weight || 0)) + '%"></i></span>'
+          + '<span class="news-ai-topic-kws">' + esc(tp.keywords.join('、')) + '</span>'
+          + '</div>';
+      }
+      rows.innerHTML = rh;
+    }
+  }
+
+  /** ③ 由關鍵字衍生的觀點與新聞依據 */
+  function renderViewpoints(vp) {
+    var block = $('newsAiVpBlock');
+    var list = $('newsAiVpList');
+    var hint = $('newsAiVpHint');
+    if (!block || !list) return;
+
+    var views = (vp && vp.views) || [];
+    if (!views.length) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+
+    if (hint) {
+      hint.textContent = '由 ' + views.length + ' 個關鍵字衍生，共引用 '
+        + countEvidence(views) + ' 條新聞原句';
+    }
+
+    var h = '';
+    for (var i = 0; i < views.length; i++) {
+      var v = views[i];
+
+      /* 方向只影響左側色條與標籤，不用紅綠（那是股價語義）。
+         dir 為 watch 時不給色條，避免把「還沒有定論」畫成傾向。 */
+      var dirCls = v.dir === 'upside' ? 'vp-up' : v.dir === 'risk' ? 'vp-risk' : 'vp-watch';
+
+      h += '<div class="news-ai-vp ' + dirCls + '">';
+
+      /* 標頭：關鍵字 → 方向 → 證據數 */
+      h += '<div class="news-ai-vp-head">'
+        + '<span class="news-ai-vp-kw ' + catCls(v.cat) + '">' + esc(v.keyword) + '</span>'
+        + '<span class="news-ai-vp-dir">' + esc(v.dirLabel) + '</span>'
+        + '<span class="news-ai-vp-meta">'
+        + v.evidenceCount + ' 條依據';
+      /* 分歧提示：有反向證據時必須說出來，否則觀點看起來像單邊背書 */
+      if (v.dissentCount > 0) {
+        h += '<span class="news-ai-vp-dissent" title="有 '
+          + v.dissentCount + ' 條證據的方向與整體結論相反">含反向 '
+          + v.dissentCount + ' 條</span>';
+      }
+      h += '</span></div>';
+
+      /* 觀點 */
+      h += '<p class="news-ai-vp-claim">' + esc(v.claim) + '</p>';
+
+      /* 為什麼重要（機制）：這是把「新聞」接到「投資判斷」的橋 */
+      if (v.mechanism) {
+        h += '<p class="news-ai-vp-mech"><span class="news-ai-vp-tag">為什麼重要</span>'
+          + esc(v.mechanism) + '</p>';
+      }
+
+      /* 證據：每一條都連回原文，並標示是引用正文還是標題 */
+      var ev = v.evidence || [];
+      if (ev.length) {
+        h += '<div class="news-ai-vp-ev-title">支撐依據</div><ul class="news-ai-vp-ev">';
+        for (var j = 0; j < ev.length; j++) {
+          var e = ev[j];
+          var polCls = e.polarity === 'pos' ? 'ev-pos' : e.polarity === 'neg' ? 'ev-neg' : 'ev-flat';
+          var src = e.publisher ? esc(e.publisher) : '來源';
+          var head = e.link
+            ? '<a href="' + esc(e.link) + '" target="_blank" rel="noopener noreferrer">#' + e.newsIndex + '</a>'
+            : '#' + e.newsIndex;
+          h += '<li class="news-ai-vp-ev-item ' + polCls + '">'
+            + '<span class="news-ai-vp-ev-idx">' + head + '</span>'
+            + '<blockquote class="news-ai-vp-quote">' + esc(e.quote) + '</blockquote>'
+            + '<span class="news-ai-vp-ev-src">' + src
+            + (e.ageText ? ' · ' + esc(e.ageText) : '')
+            + (e.quoteFromTitle ? ' · 引自標題' : '') + '</span>'
+            + '</li>';
+        }
+        h += '</ul>';
+      }
+
+      /* 須留意：每條觀點都配一個反面，避免變成單邊推薦 */
+      if (v.caveat) {
+        h += '<p class="news-ai-vp-caveat"><span class="news-ai-vp-tag">須留意</span>'
+          + esc(v.caveat) + '</p>';
+      }
+
+      h += '</div>';
+    }
+    list.innerHTML = h;
+  }
+
+  function countEvidence(views) {
+    var n = 0;
+    for (var i = 0; i < views.length; i++) n += (views[i].evidence || []).length;
+    return n;
+  }
+
+  /** ④ 結構化匯報（可整份複製） */
+  function renderReport(rep) {
+    var block = $('newsAiReportBlock');
+    var box = $('newsAiReport');
+    if (!block || !box) return;
+
+    /* 只有標題與摘要、其他全空 → 視為沒有匯報，整塊隱藏。
+       判準用 viewpoints/sources，因為那兩塊是這份匯報的主體。 */
+    var hasVp = rep && rep.viewpoints && (rep.viewpoints.items || []).length;
+    var hasSrc = rep && (rep.sources || []).length;
+    if (!hasVp && !hasSrc) {
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+
+    var h = '';
+
+    /* 一、新聞摘要 */
+    if (rep.summary && rep.summary.line) {
+      h += '<div class="news-ai-rep-sec">'
+        + '<h4 class="news-ai-rep-h"><span class="news-ai-rep-num">一</span>新聞摘要</h4>'
+        + '<p class="news-ai-rep-p">' + esc(rep.summary.line) + '</p>'
+        + '</div>';
+    }
+
+    /* 二、關鍵字 */
+    var kws = (rep.keywords && rep.keywords.items) || [];
+    if (kws.length) {
+      h += '<div class="news-ai-rep-sec">'
+        + '<h4 class="news-ai-rep-h"><span class="news-ai-rep-num">二</span>關鍵字</h4>'
+        + '<ul class="news-ai-rep-kws">';
+      for (var i = 0; i < kws.length; i++) {
+        var k = kws[i];
+        h += '<li><b class="' + catCls(k.cat) + '">' + esc(k.label) + '</b>'
+          + '<span class="news-ai-rep-kw-meta">' + esc(k.catLabel) + ' · 強度 ' + k.weight
+          + ' · 來源 ' + (k.newsIndexes || []).map(function (x) { return '#' + x; }).join('、')
+          + '</span></li>';
+      }
+      h += '</ul></div>';
+    }
+
+    /* 三、相關觀點（含依據，這是匯報的核心） */
+    var vps = (rep.viewpoints && rep.viewpoints.items) || [];
+    if (vps.length) {
+      h += '<div class="news-ai-rep-sec">'
+        + '<h4 class="news-ai-rep-h"><span class="news-ai-rep-num">三</span>相關觀點</h4>';
+      for (var v = 0; v < vps.length; v++) {
+        var it = vps[v];
+        h += '<div class="news-ai-rep-vp">'
+          + '<p class="news-ai-rep-vp-claim">'
+          + '<span class="news-ai-rep-vp-kw">' + esc(it.keyword) + '</span>'
+          + '<span class="news-ai-rep-vp-dir">' + esc(it.dirLabel) + '</span>'
+          + esc(it.claim) + '</p>';
+        if (it.mechanism) {
+          h += '<p class="news-ai-rep-vp-mech">為什麼重要：' + esc(it.mechanism) + '</p>';
+        }
+        var evs = it.evidence || [];
+        for (var e = 0; e < evs.length; e++) {
+          h += '<p class="news-ai-rep-vp-ev">'
+            + '<span class="news-ai-rep-vp-idx">依據 #' + evs[e].newsIndex + '</span>'
+            + '（' + esc(evs[e].publisher || '來源') + '）'
+            + esc(evs[e].quote) + '</p>';
+        }
+        if (it.caveat) {
+          h += '<p class="news-ai-rep-vp-caveat">須留意：' + esc(it.caveat) + '</p>';
+        }
+        h += '</div>';
+      }
+      h += '</div>';
+    }
+
+    /* 四、資料來源 */
+    var srcs = rep.sources || [];
+    if (srcs.length) {
+      h += '<div class="news-ai-rep-sec">'
+        + '<h4 class="news-ai-rep-h"><span class="news-ai-rep-num">四</span>資料來源</h4>'
+        + '<ol class="news-ai-rep-src">';
+      for (var s = 0; s < srcs.length; s++) {
+        var sc = srcs[s];
+        var link = sc.link
+          ? '<a href="' + esc(sc.link) + '" target="_blank" rel="noopener noreferrer">' + esc(sc.title) + '</a>'
+          : esc(sc.title);
+        h += '<li>' + link
+          + '<span class="news-ai-rep-src-meta">' + esc(sc.publisher || '')
+          + (sc.ageText ? ' · ' + esc(sc.ageText) : '')
+          + (sc.citedBy && sc.citedBy.length ? ' · 支撐「' + esc(sc.citedBy.join('、')) + '」' : '')
+          + '</span></li>';
+      }
+      h += '</ol></div>';
+    }
+
+    /* 五、限制說明 */
+    var cavs = rep.caveats || [];
+    if (cavs.length) {
+      h += '<div class="news-ai-rep-sec">'
+        + '<h4 class="news-ai-rep-h"><span class="news-ai-rep-num">五</span>限制說明</h4>'
+        + '<ul class="news-ai-rep-cav">';
+      for (var c = 0; c < cavs.length; c++) {
+        h += '<li>' + esc(cavs[c]) + '</li>';
+      }
+      h += '</ul></div>';
+    }
+
+    box.innerHTML = h;
+
+    /* 複製全文：用後端已算好的純文字（report.text），
+       不在前端重新拼接——兩邊各拼一次遲早會不一致。 */
+    var btn = $('newsAiCopyReport');
+    if (btn) {
+      btn.setAttribute('data-report-text', (rep && rep.text) || '');
+      if (!btn.getAttribute('data-bound')) {
+        btn.setAttribute('data-bound', '1');
+        btn.addEventListener('click', function () {
+          var text = btn.getAttribute('data-report-text') || '';
+          var done = function (ok) {
+            btn.textContent = ok ? '已複製' : '複製失敗';
+            setTimeout(function () { btn.textContent = '複製全文'; }, 1800);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { done(true); },
+              function () { done(false); });
+          } else {
+            /* 舊瀏覽器／非安全來源的退路 */
+            try {
+              var ta = doc.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              doc.body.appendChild(ta);
+              ta.select();
+              var ok = doc.execCommand('copy');
+              doc.body.removeChild(ta);
+              done(ok);
+            } catch (e) { done(false); }
+          }
+        });
+      }
     }
   }
 
