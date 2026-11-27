@@ -745,6 +745,107 @@ ok('dateKeyFromMs 以 UTC 輸出', () => {
 });
 
 /* ---------------------------------------------------------------- */
+console.log('[15] 帳本落地位置與持久性偵測');
+/* ---------------------------------------------------------------- */
+
+ok('TRACKER_LEDGER_FILE 會覆寫帳本路徑', () => {
+  const old = process.env.TRACKER_LEDGER_FILE;
+  try {
+    process.env.TRACKER_LEDGER_FILE = path.join(tmpDir, 'custom', 'ledger.json');
+    assert.strictEqual(T.resolveLedgerFile(), path.resolve(process.env.TRACKER_LEDGER_FILE));
+    const t = T.create({ datasource: fakeDs({}, {}) });
+    assert.strictEqual(t.stats().file, path.resolve(process.env.TRACKER_LEDGER_FILE),
+      'create 應採用覆寫後的路徑');
+  } finally {
+    if (old === undefined) delete process.env.TRACKER_LEDGER_FILE;
+    else process.env.TRACKER_LEDGER_FILE = old;
+  }
+});
+
+ok('未設定時落在專案 data/tracker/ledger.json', () => {
+  const old = process.env.TRACKER_LEDGER_FILE;
+  try {
+    delete process.env.TRACKER_LEDGER_FILE;
+    assert.strictEqual(T.resolveLedgerFile(), T.DEFAULT_FILE);
+  } finally {
+    if (old !== undefined) process.env.TRACKER_LEDGER_FILE = old;
+  }
+});
+
+ok('本機（非雲端平台）一律視為持久，不亂報警', () => {
+  const old = { R: process.env.RENDER, D: process.env.DYNO, F: process.env.FLY_APP_NAME };
+  try {
+    delete process.env.RENDER; delete process.env.DYNO; delete process.env.FLY_APP_NAME;
+    // 即使裝置相同也不該警告：本機的檔案系統本來就由使用者掌控
+    const r = T.persistenceInfo('/whatever/ledger.json', { statSync: () => ({ dev: 1 }) });
+    assert.strictEqual(r.persistent, true);
+  } finally {
+    if (old.R !== undefined) process.env.RENDER = old.R;
+    if (old.D !== undefined) process.env.DYNO = old.D;
+    if (old.F !== undefined) process.env.FLY_APP_NAME = old.F;
+  }
+});
+
+ok('雲端主機且同一裝置 → 警告重啟即消失', () => {
+  const old = { R: process.env.RENDER, E: process.env.TRACKER_LEDGER_FILE };
+  try {
+    process.env.RENDER = 'true';
+    delete process.env.TRACKER_LEDGER_FILE;
+    const r = T.persistenceInfo('/var/data/ledger.json', { statSync: () => ({ dev: 111 }) });
+    assert.strictEqual(r.persistent, false, '同檔案系統必須判定為不持久');
+    assert.ok(/TRACKER_LEDGER_FILE/.test(r.reason), '提示要說明怎麼修，否則等於只報錯不給路');
+  } finally {
+    if (old.R === undefined) delete process.env.RENDER; else process.env.RENDER = old.R;
+    if (old.E !== undefined) process.env.TRACKER_LEDGER_FILE = old.E;
+  }
+});
+
+ok('已設定路徑但仍在同裝置 → 提示指向「磁碟沒掛上」而非重複同一句', () => {
+  const old = { R: process.env.RENDER, E: process.env.TRACKER_LEDGER_FILE };
+  try {
+    process.env.RENDER = 'true';
+    process.env.TRACKER_LEDGER_FILE = '/var/data/ledger.json';
+    const r = T.persistenceInfo('/var/data/ledger.json', { statSync: () => ({ dev: 111 }) });
+    assert.strictEqual(r.persistent, false);
+    assert.ok(/未掛載|掛載點/.test(r.reason),
+      `設了路徑卻不持久，訊息要指出掛載問題，實際：${r.reason}`);
+  } finally {
+    if (old.R === undefined) delete process.env.RENDER; else process.env.RENDER = old.R;
+    if (old.E === undefined) delete process.env.TRACKER_LEDGER_FILE;
+    else process.env.TRACKER_LEDGER_FILE = old.E;
+  }
+});
+
+ok('雲端主機且帳本在獨立掛載點 → 判定為持久', () => {
+  const old = process.env.RENDER;
+  try {
+    process.env.RENDER = 'true';
+    const statSync = (p) => ({ dev: String(p).startsWith('/var/data') ? 999 : 111 });
+    const r = T.persistenceInfo('/var/data/ledger.json', { statSync });
+    assert.strictEqual(r.persistent, true, '跨掛載點才是真正持久，這條若永遠 false 就只是無用的狼來了');
+  } finally {
+    if (old === undefined) delete process.env.RENDER; else process.env.RENDER = old;
+  }
+});
+
+ok('無法確認裝置時保守判定為不持久', () => {
+  const old = process.env.RENDER;
+  try {
+    process.env.RENDER = 'true';
+    const r = T.persistenceInfo('/var/data/ledger.json', {
+      statSync: () => { throw new Error('ENOENT'); },
+    });
+    assert.strictEqual(r.persistent, false, '不確定時不可以給出「應該沒事」的安心感');
+  } finally {
+    if (old === undefined) delete process.env.RENDER; else process.env.RENDER = old;
+  }
+});
+
+ok('記憶體模式回報 null 而非 true', () => {
+  assert.strictEqual(T.persistenceInfo(null).persistent, null);
+});
+
+/* ---------------------------------------------------------------- */
 // 依序執行所有測試（含非同步），最後清理
 /* ---------------------------------------------------------------- */
 runAll().then(() => {

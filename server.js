@@ -1867,6 +1867,11 @@ server.listen(PORT, '0.0.0.0', () => {
   // 推介追蹤帳本：啟動時就已載入，這裡只回報狀態
   const ts = trackerStore.stats();
   console.log(`  推介追蹤帳本： ${ts.records} 筆（未結案 ${ts.open} / 已結案 ${ts.settled}）`);
+  console.log(`  帳本位置： ${ts.file}`);
+  if (ts.persistent === false) {
+    // 這一條一定要說出來：不講的話，使用者只會在某天發現歷史紀錄不見了
+    console.log(`  ⚠ 帳本可能無法長期保存：${ts.persistenceNote}`);
+  }
   if (ts.recovered) {
     console.log(`  ⚠ 帳本曾損壞並已備份：${ts.recovered.reason}`);
     if (ts.recovered.backup) console.log(`     備份位置：${ts.recovered.backup}`);

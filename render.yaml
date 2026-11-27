@@ -45,3 +45,27 @@ services:
         value: "1"
       - key: LLM_MAX_TOKENS
         value: "3000"
+
+      # ---- 推介追蹤帳本（每日精選推介追蹤）----
+      # 這是全服務**唯一不能重算**的檔案：其他 data/ 底下都是快取，
+      # 刪掉會自動重建；帳本刪掉就是歷史交易永久消失。
+      #
+      # Render 預設是 ephemeral filesystem，免費方案也沒有持久磁碟，
+      # 每次部署、以及免費方案休眠（15 分鐘無流量）後重啟，
+      # 容器都是全新的 —— 帳本會安靜地變回空的，且不會有錯誤訊息。
+      # 因此：**要保留歷史，必須掛持久磁碟並把路徑指到掛載點**。
+      #
+      # 步驟：
+      #   1. Dashboard → 本服務 → Disk → Add Disk
+      #      Mount Path: /var/data    Size: 1 GB 起
+      #   2. 把下面這行的註解拿掉（或直接在 Environment 設定同一個值）
+      #   3. 重新部署；啟動日誌會印出「帳本位置」與是否持久可保存
+      #
+      # 未掛磁碟時程式仍可運作，只是每次重啟歸零；
+      # 啟動日誌與 /api/tracker/status 都會標示 persistent:false 提醒。
+      # - key: TRACKER_LEDGER_FILE
+      #   value: /var/data/tracker/ledger.json
+
+      # 每筆推介的本金（美元）。留空則用程式預設 10,000。
+      # - key: TRACKER_CAPITAL_USD
+      #   value: "10000"

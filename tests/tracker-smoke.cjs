@@ -43,11 +43,22 @@ const TMP = path.join(__dirname, '..', '.tmpv', 'smoke');
 const LEDGER = path.join(TMP, 'ledger.json');
 const JOB_STATE = path.join(TMP, 'job-state.json');
 
+/**
+ * 清掉上一輪的產出。
+ *
+ * 這裡刻意「整目錄砍掉重建」，而不是逐一刪除已知檔名。
+ * 原本只刪 LEDGER / JOB_STATE 兩個檔，但後面的測試另外用了
+ * `ledger-job.json`、`ledger-thr.json`、`ledger-gap.json`——
+ * 那些檔沒被清到，於是 `processedPickDates` 帶著上一輪的日期進來，
+ * `dailyRun` 第一次執行就認為「今天已經處理過」，收錄 0 筆。
+ *
+ * 症狀是「第一次跑很順、第二次跑就掛」，而且只有在同一台機器
+ * 連跑兩次才會出現——最容易被誤判成程式不穩、或直接說「重跑就好」。
+ * 逐一列舉檔名的清法天生會隨測試增加而漏，因此改成整目錄重來。
+ */
 function fresh() {
-  for (const f of [LEDGER, JOB_STATE]) {
-    try { fs.unlinkSync(f); } catch (_) {}
-    try { fs.unlinkSync(`${f}.tmp`); } catch (_) {}
-  }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
+  fs.mkdirSync(TMP, { recursive: true });
 }
 
 (async () => {
