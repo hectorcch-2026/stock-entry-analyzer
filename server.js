@@ -1920,6 +1920,45 @@ server.listen(PORT, '0.0.0.0', () => {
     screener,
     30 * 60 * 1000
   );
+
+  /* ---- 追蹤任務的進程內定時 ----
+     ⚠️ 這一段是「每日推送」能不能真的每天發生 的關鍵。
+
+     先前只有上面的 startInterval，而它只跑**篩選器**（產生當日清單），
+     從來沒有跑 trackerJob.dailyRun——也就是說：
+       若沒有人開啟網頁，dailyRun 不會執行，步驟④ 也就不會推播。
+     使用者要的是「每天收到推介資訊」，不是「有開頁才收到」。
+
+     所以這裡獨立掛一個定時器，而且**只跑追蹤任務**，不跑篩選：
+       · 篩選器已有自己的 30 分鐘定時（上面那一行），重複跑會白白打上游；
+       · dailyRun 內部有 30 分鐘節流與「今日已推」鎖，
+         即使這裡每 30 分鐘叫一次，一天也只會真的推一則。
+     這正是「一天一則」的第二道保險（第一道是 notify-state.json 的發送鎖）。
+
+     仍然需要 ENABLE_INPROCESS_CRON=1 才啟用：
+       free 方案會休眠，醒來後時間跳過，定時器本身不可靠——
+       與其開著製造「以為有排程」的假象，不如維持一致的顯式開關。 */
+  if (String(process.env.ENABLE_INPROCESS_CRON || '') === '1') {
+    const intervalMs = 30 * 60 * 1000;
+    const timer = setInterval(async () => {
+      try {
+        const r = await trackerJob.dailyRun({});
+        if (r.ran) {
+          const n = r.notify;
+          console.log(`[tracker-cron] 已執行（新增 ${r.added} / 更新 ${r.updated}）`
+            + (n ? `，推送：${n.skipped ? `略過（${n.reason}）` : (n.ok ? '成功' : `失敗 ${n.error}`)}` : '，未注入通知'));
+        }
+      } catch (e) {
+        // 定時任務的錯誤只記錄，不讓它把進程帶走
+        console.log(`[tracker-cron] 執行失敗：${e.message}`);
+      }
+    }, intervalMs);
+    if (timer.unref) timer.unref();
+    console.log(`[tracker-cron] 追蹤任務定時已啟用，每 ${Math.round(intervalMs / 60000)} 分鐘檢查一次`);
+  } else {
+    console.log('[tracker-cron] 追蹤任務定時未啟用（ENABLE_INPROCESS_CRON≠1）。'
+      + '每日推送依賴訪問觸發；若整天無人開頁，當天不會推送。');
+  }
 });
 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
