@@ -62,6 +62,14 @@ await page.waitForFunction(() => {
 }, { timeout: 180000 }).catch(() => {});
 await page.waitForTimeout(4000);
 
+/* 時間區間按鈕與圖表都在「技術」子分頁內（個股頁已改為 4 個子分頁），
+   面板用 hidden 屬性隱藏，不切分頁就點不到。這也是真實使用者路徑。 */
+const techTab = await page.$('#tab-tech');
+if (techTab) {
+  await page.click('#tab-tech');
+  await page.waitForTimeout(600);
+}
+
 const rangeBtns = await page.locator('.range-btn[data-range]').count();
 rec('時間區間按鈕 5 個', rangeBtns === 5, `${rangeBtns} 個`);
 
