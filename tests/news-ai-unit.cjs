@@ -1175,6 +1175,66 @@ t('L9 規則層的「市場焦點」必須說出關注點，不能只數則數',
   assert.ok(!/集中在財務（\d+ 則）。$/.test(f), `只數則數不算焦點：${f}`);
 });
 
+t('L10 頁面框架文字不得當成正文或摘要', () => {
+  /* 線上實測（Render，無金鑰走規則層）：
+     Google News 包裝頁的 og:description 是「Comprehensive up-to-date news
+     coverage, aggregated from sources all over the world by Google News.」
+     10 則裡有 7 則抓到這句，於是每一欄「要點」都變成同一句話。
+     Yahoo 文章頁開頭則是「Trading disclosure The above button links to…」。 */
+  const gn = articleFetch.extractBody(
+    '<html><head><meta property="og:description" content="Comprehensive up-to-date news coverage, '
+    + 'aggregated from sources all over the world by Google News."></head><body>'
+    + '<p>Apple reported record revenue this quarter on strong iPhone demand and services growth across all regions.</p>'
+    + '</body></html>'
+  );
+  assert.ok(!/comprehensive up-to-date/i.test(gn.body), `Google 包裝頁文字未被剔除：${gn.body.slice(0, 60)}`);
+  assert.ok(/Apple reported/.test(gn.body), '真正的正文不應被連帶丟棄');
+
+  const yh = articleFetch.extractBody(
+    '<html><body><p>Trading disclosure The above button links to Coinbase. Yahoo Finance is not a '
+    + 'broker-dealer or investment advisor and does not endorse any product or service.</p>'
+    + '<p>Apple reported record revenue this quarter on strong iPhone demand and services growth across all regions of the world.</p>'
+    + '</body></html>'
+  );
+  assert.ok(!/trading disclosure/i.test(yh.body), `Yahoo 免責區塊未被剔除：${yh.body.slice(0, 60)}`);
+  assert.ok(/Apple reported/.test(yh.body), 'Yahoo 的正文段不應被連帶丟棄');
+
+  /* 摘要層也要擋（第三道防線） */
+  const s = articleFetch.summarizeBody({
+    body: 'Comprehensive up-to-date news coverage, aggregated from sources all over the world by Google News. '
+      + 'Apple reported record revenue of 478.8 billion and gross margin of 48.79% this quarter.',
+  });
+  assert.ok(!/comprehensive up-to-date/i.test(s), `摘要混入頁面框架：${s}`);
+  assert.ok(/478\.8|48\.79/.test(s), `剔除框架後應保留實質句：${s}`);
+});
+
+/* ============================================================
+   M 抓取管線的端到端不變量
+   ============================================================ */
+
+section('M 抓取管線不變量');
+
+t('M1 enrichNews 必須把 subject 傳進評分與摘要（否則前端會看到別家公司的摘要）', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'lib/article-fetch.js'), 'utf8');
+  /* 這是靜默失效風險：scoreNewsworthiness 與 summarizeBody 的 subject
+     參數若沒接到，所有新規則都不會生效，但程式不會報錯。 */
+  assert.ok(/scoreNewsworthiness\(it, subject\)/.test(src),
+    'enrichNews 必須把 subject 傳給 scoreNewsworthiness');
+  assert.ok(/summarizeBody\(it, subject\)/.test(src),
+    'enrichNews 必須把 subject 傳給 summarizeBody');
+});
+
+t('M2 server 端必須提供足夠大的新聞池並帶上 subject', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  /* 池子太小的話，被扣分的劣質稿無法被替換，噪音必然入列 */
+  const pool = src.match(/const NEWS_POOL\s*=\s*(\d+)/);
+  assert.ok(pool, '找不到 NEWS_POOL 定義');
+  assert.ok(parseInt(pool[1], 10) >= 20, `新聞池需 ≥20 則才換得掉劣質稿，實得 ${pool[1]}`);
+  assert.ok(/subject:\s*\{[\s\S]{0,140}symbol/.test(src),
+    'enrichNews 呼叫必須傳 subject（含 symbol）');
+  assert.ok(/limit:\s*10/.test(src), 'enrichNews 仍只回 10 則');
+});
+
 console.log('\n' + '='.repeat(56));
 console.log(`  通過 ${pass}　失敗 ${fail}　共 ${pass + fail}`);
 console.log('='.repeat(56));
