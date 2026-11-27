@@ -989,7 +989,11 @@ await check('K1 390px 分頁四格全在畫面內、不需橫滑', async () => {
   const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await m.waitForTimeout(6000);
+    /* 固定等待不足：線上冷啟動時 #result 尚未解除 hidden，
+       分頁列高度會量到 0，測試就變成「看誰的機器快」的擲骰子。
+       改成明確等元素可見——那才是被測的狀態本身。 */
+    await m.waitForSelector('.sub-tabs', { state: 'visible', timeout: 60000 });
+    await m.waitForTimeout(1500);
 
     const r = await m.evaluate(() => {
       const bar = document.querySelector('.sub-tabs');
@@ -1040,7 +1044,8 @@ await check('K2 四個分頁的內容皆無小於 12.5px 的可見文字', async
   const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await m.waitForTimeout(7000);
+    await m.waitForSelector('.sub-tabs', { state: 'visible', timeout: 60000 });
+    await m.waitForTimeout(1500);
 
     for (const tab of ['decision', 'tech', 'fund', 'news']) {
       const btn = await m.$('.sub-tab[data-tab="' + tab + '"]');
@@ -1081,7 +1086,8 @@ await check('K3 手機版文字對比度：不合格者 <= 5%（且不含圖表�
   const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await m.waitForTimeout(7000);
+    await m.waitForSelector('.sub-tabs', { state: 'visible', timeout: 60000 });
+    await m.waitForTimeout(1500);
 
     let total = 0;
     const bad = [];
@@ -1174,7 +1180,8 @@ await check('K4 圖表刻度標籤放大後不重疊', async () => {
   const m = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
     await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await m.waitForTimeout(6000);
+    await m.waitForSelector('.sub-tabs', { state: 'visible', timeout: 60000 });
+    await m.waitForTimeout(1500);
     const btn = await m.$('.sub-tab[data-tab="tech"]');
     if (btn) { await btn.click(); await m.waitForTimeout(1500); }
 
@@ -1235,7 +1242,8 @@ await check('K5 降級路徑（模組不可用）也不得有小於 12.5px 的�
     });
 
     await m.goto(BASE + '/#/detail/' + encodeURIComponent(SYMBOL), { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await m.waitForTimeout(8000);
+    await m.waitForSelector('.sub-tabs', { state: 'visible', timeout: 60000 });
+    await m.waitForTimeout(2000);
 
     let found = [];
     for (const tab of ['decision', 'tech', 'fund', 'news']) {
