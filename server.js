@@ -812,9 +812,18 @@ const server = http.createServer(async (req, res) => {
       /* ---- 手動推送 Telegram ----
          為什麼要 token：這會真的發一則訊息到使用者的手機，屬於有副作用的操作。
          為什麼要 force：使用者按下「現在推一次」的意思就是「不管今天推過沒」，
-         若沿用每日鎖就會被擋下、看起來像壞掉。 */
+         若沿用每日鎖就會被擋下、看起來像壞掉。
+
+         「沒設 token 就開放」是錯的，而且真的出過事：
+         本機沒設 PICKS_TOKEN，任何人（包括我自己的探測 curl）打一次
+         ?notify=1，就會真的推一則訊息到手機。沒有密碼的門等於沒鎖門。
+         所以改成 fail-closed：沒設 token 就一律拒絕，並明確告訴你怎麼開。 */
       if (q.notify === '1') {
-        if (token && String(q.token || '') !== token) {
+        if (!token) {
+          return sendError(res, 403, 'NOT_CONFIGURED', '未設定 PICKS_TOKEN，手動推送已停用',
+            '這個端點會真的發訊息到手機，因此預設關閉。要啟用請在環境變數設定 PICKS_TOKEN，再帶 &token=…');
+        }
+        if (String(q.token || '') !== token) {
           return sendError(res, 403, 'FORBIDDEN', '手動推送需要有效的 token',
             '請在 query 帶上 token=…（伺服器端設定 PICKS_TOKEN）');
         }

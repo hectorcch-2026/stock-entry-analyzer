@@ -298,14 +298,57 @@ t('E2 舊網址 #/macro/:symbol 會轉到個股詳情', () => {
   ok(/if\s*\(symbol\)/.test(before), '轉址未包在 if (symbol) 內（會把宏觀頁也轉走）');
 });
 
-t('E3 導航為四項，且不含已搬移的財報入口', () => {
+/* 這條測試的**意圖**是「導航與頁面真的接得上，而且財報不是獨立選單」，
+   不是「導航剛好四項」。原本把 4 寫死，於是每次新增功能（RRG 版塊輪動）
+   都會誤報一次——那不是回歸，是測試跟不上產品。
+
+   改成驗證真正的失敗模式：**加了導航卻忘了接頁面**（點了會空白）。
+   導航的 data-route 與頁面容器的對應寫在 public/common.js 的 dispatch()/showView()。 */
+t('E3 每個導航都接到真實頁面，且不含已搬移的財報', () => {
   const nav = [...html.matchAll(/<a href="#\/(\w+)" data-route="(\w+)" class="nav-item[^"]*">([^<]+)<\/a>/g)]
     .map((m) => ({ route: m[2], text: m[3].trim() }));
   const visible = nav.filter((n) => n.route !== 'detail');
-  eq(visible.length, 4, `可見導航應為 4 項，實際 ${visible.length}`);
+  ok(visible.length >= 3, `可見導航至少 3 項，實際 ${visible.length}`);
+
+  // 路由 → 頁面容器的實際對應（predict 走預設分支，容器是 viewChart）
+  const EXPECT = {
+    predict: 'viewChart', screen: 'viewScreen', tracker: 'viewTracker',
+    macro: 'viewMacro', rrg: 'viewRrg',
+  };
+  const common = read('public/common.js');
+
+  /* 只取「view 變數被決定的那一段」，不能整檔亂搜。
+     踩過的坑：dispatch 裡有兩處 r.name === 'rrg'——一處決定要顯示哪個 view
+     （209 行），一處決定要叫哪個 handler（220 行）。整檔搜尋的話，
+     就算把 view 映射拿掉，handler 那行仍會讓斷言通過，於是這個測試
+     永遠不會失敗——一個不會失敗的測試等於沒有測試。 */
+  const mapStart = common.indexOf('var view = r.name');
+  const mapEnd = common.indexOf('showView(view)', mapStart);
+  const viewExpr = mapStart > -1 && mapEnd > mapStart ? common.slice(mapStart, mapEnd) : '';
+  ok(viewExpr.length > 0, '找不到 dispatch() 中決定 view 的映射區塊');
+
+  for (const n of visible) {
+    const container = EXPECT[n.route];
+    ok(container, `導航「${n.text}」指向未知路由 ${n.route}，請在測試的 EXPECT 補上對應容器`);
+    if (!container) continue;
+
+    // ① 容器真的存在於 HTML
+    ok(new RegExp(`id="${container}"`).test(html),
+      `導航「${n.text}」需要容器 #${container}，但 index.html 找不到`);
+    // ② showView 真的有處理它（否則切過去不會顯示）
+    ok(new RegExp(`getElementById\\('${container}'\\)`).test(common),
+      `#${container} 沒有出現在 common.js 的 showView 中（切換時不會顯示）`);
+    // ③ view 映射把它指到正確的 view（predict 是預設分支，不寫字面值）
+    if (n.route !== 'predict') {
+      ok(new RegExp(`r\\.name === '${n.route}'`).test(viewExpr),
+        `dispatch() 的 view 映射沒有處理 r.name === '${n.route}'，導航會落到預設視圖`);
+    }
+  }
+
   ok(visible.some((n) => /宏觀/.test(n.text)), '缺少宏觀導航');
   ok(!visible.some((n) => /財報/.test(n.text)),
     '導航仍把財報當獨立入口（財報屬於個股模塊，不該另立選單）');
+  ok(visible.some((n) => n.route === 'rrg'), '缺少版塊輪動導航（rrg）');
 });
 
 t('E4 宏觀導航指向 #/macro（不帶代碼）', () => {
