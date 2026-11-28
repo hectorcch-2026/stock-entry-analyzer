@@ -212,12 +212,25 @@ try {
   poolHint && /^\d+$/.test(poolHint) ? pass('標的池數量已由 API 填入', `${poolHint} 檔`) : fail('標的池數量', String(poolHint));
 
   const hintLine = (await page.textContent('#screenHint'))?.replace(/\s+/g, ' ').trim();
-  /美股\s*\d+\s*檔.*港股\s*\d+\s*檔.*共\s*\d+\s*檔/.test(hintLine)
-    ? pass('母體說明文案已由 API 生成', hintLine.slice(0, 56) + '…')
-    : fail('母體說明文案', String(hintLine).slice(0, 80));
+  /*
+   * 母體說明文案已改為「美股限定」版本：標的池為在美國交易所上市的 N 檔個股
+   * （已排除中概股 M 檔）。舊版斷言寫死「美股 N 檔 + 港股 M 檔 + 共 N 檔」，
+   * 母體改成純美股後這個結構不會再出現，因此必須跟著改；否則測試會紅在
+   * 一個「文案換了」的事實上，而不是功能壞了。
+   */
+  /在美國交易所上市.*\d+.*檔.*排除中概股\s*\d+\s*檔/.test(hintLine)
+    ? pass('母體說明文案已由 API 生成', hintLine.slice(0, 60) + '…')
+    : fail('母體說明文案', String(hintLine).slice(0, 100));
 
-  // 提交篩選（用港股縮小範圍以縮短等待）
-  await page.selectOption('#fMarket', 'hk');
+  // 提交篩選（美股母體 500 檔，用美股並限制筆數以縮短等待）
+  //
+  // 條件刻意放寬：母體從 154 擴到 500 後，預設的 minScore=55 在時間預算內
+  // 未必能湊到符合條件的標的，測試就會卡在「結果表為空」。這裡把評分門檻
+  // 降到 0、距買區放寬，確保一定能取得資料列 —— 本測試要驗的是
+  // 「表格能正確渲染與排序」，不是「篩選條件挑得準」。
+  await page.selectOption('#fMarket', 'us');
+  await page.fill('#fMinScore', '0');
+  await page.fill('#fMaxDistAtr', '50');
   await page.fill('#fLimit', '5');
   const t0 = Date.now();
   await page.click('#screenBtn');
@@ -329,6 +342,10 @@ try {
   await page.waitForTimeout(400);
 
   // 6b 無資料：極嚴苛條件
+  //
+  // 這裡用 market=hk 是為了**確定**拿到空集合：標的池已限定美股，
+  // hk 必定回空並顯示「僅納入美國交易所上市個股」的說明。
+  // 這比用「極嚴苛評分條件」更可靠 —— 後者仍可能因上游某檔恰好達標而失敗。
   await page.selectOption('#fMarket', 'hk');
   await page.fill('#fMinScore', '100');
   await page.fill('#fMaxDistAtr', '0.01');

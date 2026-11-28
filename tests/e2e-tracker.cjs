@@ -382,15 +382,26 @@ function ok(name, cond, detail) {
       unrealized: document.getElementById('trUnrealized').textContent,
       deployed: document.getElementById('trDeployed').textContent,
       counts: document.getElementById('trCounts').textContent,
-      rows: [...document.querySelectorAll('#trBody tr')].map((tr) => {
-        const td = tr.querySelectorAll('td');
-        return {
-          symbol: (td[0] && td[0].innerText.split('\n')[0] || '').trim(),
-          pickDate: (td[1] && td[1].innerText.trim()) || '',
-          status: (td[11] && td[11].innerText.trim()) || '',
-          pnlText: (td[8] && td[8].innerText.trim()) || '',
-        };
-      }),
+      /*
+       * 只取「資料列」，排除展開用的 `.tr-basis-row`。
+       *
+       * 為什麼一定要排除：展開列（推薦依據）是 `hidden` 的，但 hidden 只是
+       * 不顯示，仍在 DOM 裡。它有 <td> 但只有一格（colspan 吃滿整列），
+       * 所以 td[0] 是空字串、td[1]/td[8] 根本不存在。若不排除，逐筆比對
+       * 會拿金鑰 `@`（空代碼@空日期）去查 API，查不到就判定「應為 — 實際空」，
+       * 於是每一筆正常資料旁邊都冒出一筆假的不一致。
+       */
+      rows: [...document.querySelectorAll('#trBody tr')]
+        .filter((tr) => !tr.classList.contains('tr-basis-row'))
+        .map((tr) => {
+          const td = tr.querySelectorAll('td');
+          return {
+            symbol: (td[0] && td[0].innerText.split('\n')[0] || '').trim(),
+            pickDate: (td[1] && td[1].innerText.trim()) || '',
+            status: (td[11] && td[11].innerText.trim()) || '',
+            pnlText: (td[8] && td[8].innerText.trim()) || '',
+          };
+        }),
     }));
 
     // 總損益

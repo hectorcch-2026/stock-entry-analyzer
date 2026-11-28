@@ -179,6 +179,38 @@ const root = ${JSON.stringify(path.join(__dirname, '..'))};
 const ds = require(path.join(root, 'lib', 'datasource'));
 // 樁：不動上游，直接回固定的 K 線。圖的繪製邏輯完全走正式程式。
 ds.chart = async () => ({ candles: ${JSON.stringify(BARS)} });
+/*
+ * quote 也要樁。analyze() 每檔併發打 chart×2 + quote，只樁 chart 的話
+ * quote 仍會真的連 Yahoo —— 測試就變成「看起來離線、其實在連網」，
+ * 上游一旦限流（403/429）就整批失敗，而且症狀是「沒有資料列」，
+ * 完全看不出是網路問題。理由詳見 e2e-sector-flow.cjs 同一段註解。
+ */
+ds.quote = async function (symbol) {
+  var sym = String(symbol).toUpperCase();
+  /*
+   * 匯率對（USDHKD=X）也走同一個 quote 介面。
+   * fx.js 就是呼叫 datasource.quote('USDHKD=X') 取得 1 USD 兌多少 HKD。
+   * 若這裡不特別處理，它會拿到「股價」當匯率，折算出來的損益全錯 ——
+   * 而且不會報錯，只是數字靜默偏離。
+   */
+  if (/=X$/.test(sym)) {
+    return {
+      symbol: sym, name: sym, shortName: sym,
+      currency: 'HKD', exchange: 'Stub FX', market: 'fx',
+      price: 7.8, previousClose: 7.8, changePercent: 0,
+      dayHigh: 7.8, dayLow: 7.8, volume: 0,
+      marketTime: Date.now(), timezone: 'UTC',
+    };
+  }
+  var px = ${JSON.stringify(BARS[BARS.length - 1].c)};
+  return {
+    symbol: sym, name: sym, shortName: sym,
+    currency: 'USD', exchange: 'Stub Exchange', market: 'us',
+    price: px, previousClose: px * 0.995, changePercent: 0.5,
+    dayHigh: px * 1.01, dayLow: px * 0.99, volume: 1e6,
+    marketTime: Date.now(), timezone: 'America/New_York',
+  };
+};
 process.chdir(root);
 require(path.join(root, 'server.js'));
 `, 'utf8');
@@ -236,8 +268,19 @@ async function waitReady(ms = 30000) {
     fs.writeFileSync(path.join(__dirname, '..', '.probe', 'rec-basis-chart.png'), buf);
 
     /* ---- 2. 推介頁的「推薦依據」按鈕 ---- */
-    await page.goto(`${BASE}/#/tracker`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1600);
+    /*
+     * 用 domcontentloaded + 等資料列，而不是 networkidle。
+     *
+     * networkidle 要求「500ms 內沒有任何請求」，但這一頁會：
+     *   1. GET /api/tracker（會跑一輪更新）
+     *   2. 渲染後對每列打 /api/tracker/chart.png 取縮圖
+     * 兩者串起來很容易超過 30 秒，於是 networkidle 逾時 —— 而錯誤訊息
+     * 只會說「page.goto 逾時」，看起來像整頁壞掉，其實只是等得太嚴格。
+     * 我們真正關心的是「資料列出來了、按鈕在」，等那個條件更精確。
+     */
+    await page.goto(`${BASE}/#/tracker`, { waitUntil: 'domcontentloaded' });
+    await page.locator('#trBody tr.tr-row').first().waitFor({ state: 'visible', timeout: 120000 });
+    await page.waitForTimeout(600);
     const rows = await page.locator('#trBody tr.tr-row').count();
     ok('推介頁有資料列', rows === 2, `${rows} 列`);
 

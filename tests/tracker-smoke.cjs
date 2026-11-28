@@ -302,9 +302,9 @@ function fresh() {
       + `名目 ${notional.toFixed(2)} USD（${r.entry.date}）`);
   });
 
-  await ok('真實 K 線：建倉當天不判出場（資料只到建倉日時停在持倉中）', async () => {
+  await ok('真實 K 線：建倉當天不判出場（出場日必定晚於建倉日）', async () => {
     const t = T.create({ filePath: null, datasource, capitalUsd: 10000 });
-    // 止賺設在 217，遠低於 11-25 的高點 232.12。若允許建倉當天判出場，
+    // 止賺設在 217，遠低於 11-25 的高點。若允許建倉當天判出場，
     // 這筆會立刻變成「已止賺」——但那是不對的：日線分不清
     // 「先漲到 232 再跌回買區」還是「先跌進買區再漲到 232」。
     const rec = t.addPick({
@@ -320,13 +320,33 @@ function fresh() {
       console.log('      （上游無 11-25 之後的日線，未觸價——略過）');
       return;
     }
-    assert.strictEqual(r.status, 'holding',
-      `建倉當天不應結案，實際 ${r.status}（若為 target_hit 表示建倉當天就判了出場）`);
-    assert.strictEqual(r.settled, false, '尚未結案');
-    // 即使當天 high 已遠超止賺價，也不得出場
-    assert.strictEqual(r.exit, null, '建倉當天不得有出場記錄');
-    console.log(`      建倉於 ${r.entry.date}（${r.entry.price}），`
-      + `當天高點已超止賺 217 但仍停在持倉中——正確`);
+
+    // 這裡斷言的是「不變量」，不是「當下的狀態」。
+    //
+    // 原本寫 `status === 'holding'` + `exit === null`，等於假設
+    // 「上游資料只到建倉那天」。但真實 K 線每天都會往後長：時間一過，
+    // 11-26、11-27 的日線補上來，止賺價 217 被正常觸及、合法結案，
+    // 這筆就變成 target_hit —— 於是測試開始報錯，而程式完全正確。
+    // 這種測試把「資料剛好還沒更新」當成正確性依據，本質上是在
+    // 測量跑測試的日期，不是在測程式。
+    //
+    // 真正該守的規則只有一條：建倉當天不得出場。
+    // 即出場日必須嚴格晚於建倉日；若還沒出場，就不該有出場記錄。
+    assert.ok(r.entry && r.entry.date, `應已建倉，實際 ${r.status}`);
+    if (r.exit) {
+      assert.ok(r.exit.date > r.entry.date,
+        `出場日 ${r.exit.date} 必須晚於建倉日 ${r.entry.date}——`
+        + '同日即出場表示建倉當天就判了出場，那是錯的');
+      assert.strictEqual(r.settled, true, '有出場記錄就必須已結案');
+      console.log(`      建倉 ${r.entry.date}（${r.entry.price}）→ `
+        + `出場 ${r.exit.date}（${r.exit.price}，${r.exit.reason}）`
+        + '，出場日晚於建倉日——正確');
+    } else {
+      assert.strictEqual(r.status, 'holding', `尚未出場時狀態應為 holding，實際 ${r.status}`);
+      assert.strictEqual(r.settled, false, '尚未結案');
+      console.log(`      建倉於 ${r.entry.date}（${r.entry.price}），`
+        + '當天高點已超止賺 217 但仍停在持倉中——正確');
+    }
   });
 
   await ok('真實 K 線：建倉後有次一交易日時，止賺能正確結案', async () => {

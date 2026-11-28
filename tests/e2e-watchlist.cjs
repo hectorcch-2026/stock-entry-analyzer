@@ -19,6 +19,32 @@ function ok(name, cond, detail) {
   page.on('console', (m) => { if (m.type() === 'error') consoleErrs.push(m.text()); });
   page.on('pageerror', (e) => consoleErrs.push('pageerror: ' + e.message));
 
+  /*
+   * 先把觀察清單清空。
+   *
+   * 為什麼一定要做：這支測試的第一段就斷言「空清單時顯示空狀態」，
+   * 而觀察清單是**持久化檔案**（data/watchlist.json），不會隨進程結束重置。
+   * 上一輪測試留下的項目（例如上一個案例加的 2015.HK）會讓這一輪從一開始
+   * 就不是空清單，於是「空狀態」「有 1 列」「移出後回到空狀態」全數失敗。
+   *
+   * 症狀很容易誤判成「功能壞了」：錯誤訊息是「觀察清單有 1 列  2 列」，
+   * 看起來像多渲染了一列，實際上只是資料沒清。
+   *
+   * 用 DELETE /api/watchlist?symbol= 逐筆清（就是使用者按「移出觀察」打的
+   * 同一個端點），而不是直接刪檔 —— 這樣才會連伺服器記憶體裡的狀態一起清掉。
+   */
+  try {
+    const cur = await (await fetch(`${BASE}/api/watchlist`)).json();
+    const items = Array.isArray(cur.items) ? cur.items : [];
+    for (const it of items) {
+      await fetch(`${BASE}/api/watchlist?symbol=${encodeURIComponent(it.symbol)}`,
+        { method: 'DELETE' });
+    }
+    if (items.length) console.log(`  （前置清理：移除 ${items.length} 筆殘留）`);
+  } catch (e) {
+    console.log(`  （前置清理失敗，將以現況續跑：${e.message}）`);
+  }
+
   // ---- 1. 觀察清單頁（空狀態） ----
   await page.goto(`${BASE}/#/watch`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(600);

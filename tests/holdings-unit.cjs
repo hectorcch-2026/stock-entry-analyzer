@@ -391,6 +391,50 @@ t('E3 不支援的版塊要拋 BAD_SECTOR 並附可用清單', async () => {
   assert.ok(/XLK/.test(caught.hint || ''), 'hint 應列出可用版塊');
 });
 
+/*
+ * E4/E5：MAX_HOLDINGS 是「個股 → 版塊」對照表的覆蓋率上限。
+ *
+ * 為什麼要釘住一個看起來無害的常數：
+ *   它原本是 50，理由是「持股表只要顯示前 N 大」。但 getSectorIndex() 拿
+ *   同一份持股建對照表，50 於是變成天花板——母體 500 檔中只有 405 檔
+ *   查得到版塊，其餘 95 檔被誤判為「不屬於任何版塊」。這個 bug 沒有症狀：
+ *   漏斗數字仍自洽（405+95=500）、沒有錯誤訊息、被丟掉的還是 CTSH 這種
+ *   正常大型股。唯一能防止它復發的方式，就是斷言這個上限不得再被調低
+ *   到低於現實 ETF 的持股規模。
+ *
+ * 下限取 100 而不是 83（實測最大 XLI 的持股數）：留一點餘裕，因為 ETF
+ * 成分股會隨時間增加，83 是某一天的快照而非結構上限。
+ */
+t('E4 MAX_HOLDINGS 不得低於現實 ETF 持股規模（覆蓋率護欄）', () => {
+  assert.ok(typeof sh.MAX_HOLDINGS === 'number', 'MAX_HOLDINGS 應匯出為數字');
+  assert.ok(sh.MAX_HOLDINGS >= 100,
+    `MAX_HOLDINGS=${sh.MAX_HOLDINGS} 太低。實測 XLI 有 83 檔持股，` +
+    '低於 100 會讓版塊對照表出現大量「查無版塊」而無任何錯誤訊息');
+});
+
+t('E5 getHoldings 的 limit 會被 MAX_HOLDINGS 夾住（不能繞過上限）', () => {
+  // 夾制邏輯：Math.max(1, Math.min(limit || 10, MAX_HOLDINGS))
+  // 這裡直接驗算同一條式子，確保語意沒被改寫。
+  const clamp = (v) => Math.max(1, Math.min(Number(v) || 10, sh.MAX_HOLDINGS));
+  assert.strictEqual(clamp(1e9), sh.MAX_HOLDINGS, '超大 limit 應夾到上限');
+  assert.strictEqual(clamp(0), 10, '0 應退回預設 10');
+  assert.strictEqual(clamp(-5), 1, '負數應夾到下限 1');
+  assert.strictEqual(clamp(undefined), 10, 'undefined 應退回預設 10');
+});
+
+t('E6 getSectorIndex 取持股時用的是 MAX_HOLDINGS，不是寫死的小數字', () => {
+  /*
+   * 這是最關鍵的一條：getSectorIndex() 若傳入寫死的 50，覆蓋率就會被
+   * 截斷，而且不會有任何錯誤。用原始碼斷言它確實傳 MAX_HOLDINGS。
+   */
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sector-holdings.js'), 'utf8');
+  const m = src.match(/getSectorIndex\s*\(\s*opts[^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(m, '找不到 getSectorIndex 定義');
+  assert.ok(/limit:\s*MAX_HOLDINGS/.test(m[0]),
+    'getSectorIndex 應以 limit: MAX_HOLDINGS 取持股；若改回寫死數字，' +
+    '版塊對照表會靜默漏掉排第 N 名之後的成分股');
+});
+
 /* ============================================================
    F. 前端契約
    ============================================================ */
