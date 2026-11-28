@@ -780,9 +780,9 @@
           <label class="sf-field">
             <span class="sf-k">市場</span>
             <select id="fMarket" class="sf-input">
-              <option value="all">全部（美股 + 港股）</option>
-              <option value="us">美股</option>
-              <option value="hk">港股</option>
+              <option value="us">美股（標的池僅含美股）</option>
+              <option value="all">全部（同美股）</option>
+              <option value="hk">港股（母體不含，將回空）</option>
             </select>
           </label>
 
@@ -819,6 +819,28 @@
           </label>
         </div>
 
+        <!--
+          版塊輪動前置（三階段漏斗）
+          預設「開啟」——因為這是本系統的主要方法論：先確認版塊順風，
+          再挑個股。關閉時退回全母體篩選，適合「我已經有特定想法、
+          只想看技術面排名」的情境。
+        -->
+        <div class="sf-row sf-flow-row">
+          <label class="sf-check">
+            <input type="checkbox" id="fSectorFlow" checked>
+            <span><strong>版塊輪動前置</strong>：先取優勢版塊，再從中選股（建議開啟）</span>
+          </label>
+          <label class="sf-field sf-inline">
+            <span class="sf-k">優勢版塊數</span>
+            <select id="fSectorTopN" class="sf-input">
+              <option value="1">前 1（最快）</option>
+              <option value="2" selected>前 2（建議，約 90 秒內完成）</option>
+              <option value="3">前 3（較慢，可能逾時）</option>
+              <option value="4">前 4（容易逾時）</option>
+            </select>
+          </label>
+        </div>
+
         <div class="sf-actions">
           <button type="submit" id="screenBtn" class="primary-btn" formnovalidate>
             <span class="btn-label">開始篩選</span>
@@ -829,7 +851,7 @@
         </div>
 
         <p class="hint-line" id="screenHint">
-          篩選是在本機伺服器即時計算：美股與港股共 <span id="poolCountHint">150+</span> 檔，約需 8–15 秒。條件放寬可得到更多結果。
+          篩選是在本機伺服器即時計算：標的池為在美國交易所上市的 <span id="poolCountHint">500</span> 檔個股（已排除中概股）。條件放寬可得到更多結果。
         </p>
       </form>
     </section>
@@ -844,6 +866,53 @@
       <div class="screen-stats" id="screenStats"></div>
 
       <div class="screen-reasons" id="screenReasons" hidden></div>
+
+      <!--
+        表 A：版塊輪動總覽（三階段流程的第一段）
+        只在 sectorFlow 有回傳時顯示。11 列全部列出，不只列優勢的——
+        使用者需要看到「哪些版塊被排除了、為什麼」，否則無法判斷
+        「這次只選出 2 個版塊」是市場真的只有 2 個強勢，
+        還是程式漏算了。
+      -->
+      <div class="sector-flow-wrap" id="sectorFlowWrap" hidden>
+        <div class="sf-block">
+          <h3 class="sf-block-title">
+            階段一：版塊輪動
+            <span class="sf-block-sub" id="sectorFlowMeta"></span>
+          </h3>
+          <p class="sf-verdict-line" id="sectorFlowBasis"></p>
+          <div class="table-wrap">
+            <table class="screen-table sector-table">
+              <thead>
+                <tr>
+                  <th class="num sf-col-rank">名次</th>
+                  <th class="sf-col-sector">版塊</th>
+                  <th class="num">強弱分數</th>
+                  <th class="num">相對強度</th>
+                  <th class="num">動能</th>
+                  <th class="sf-col-quad">象限</th>
+                  <th class="sf-col-next">下一步</th>
+                  <th class="num sf-col-members">池內檔數</th>
+                  <th class="sf-col-verdict">判定</th>
+                </tr>
+              </thead>
+              <tbody id="sectorFlowBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!--
+          表 B：標的池建立過程（漏斗）
+          四個數字必須能相加對得上，所以直接寫出算式而不是只給結果。
+          無版塊歸屬那一列特別標紅：它應該是 0，非 0 代表資料管線異常，
+          而不是「這些股票不合格」。
+        -->
+        <div class="sf-block">
+          <h3 class="sf-block-title">階段二：標的池建立</h3>
+          <div class="funnel" id="sectorFunnel"></div>
+          <p class="sf-coverage" id="sectorCoverage"></p>
+        </div>
+      </div>
 
       <div class="screen-loading" id="screenLoading" hidden aria-live="polite">
         <div class="skeleton-line w40"></div>
@@ -862,6 +931,12 @@
           <thead>
             <tr>
               <th class="st-sym">代碼 / 名稱</th>
+              <!--
+                版塊兩欄只在版塊流程啟用時有值。資料行由 screen.js 依
+                sector 是否存在決定是否輸出，避免在一般篩選時出現兩欄空白。
+              -->
+              <th class="st-sector">所屬版塊</th>
+              <th class="num st-sector-rank">版塊名次</th>
               <th class="num st-sort" data-sort="price">現價 <span class="sort-ind"></span></th>
               <th class="num st-sort" data-sort="changePct">漲跌 <span class="sort-ind"></span></th>
               <th class="num st-sort" data-sort="score">評分 <span class="sort-ind"></span></th>

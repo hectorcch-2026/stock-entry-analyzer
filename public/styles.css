@@ -1441,6 +1441,102 @@ select.sf-input { cursor: pointer; }
 }
 .row-btn:hover { background: #e2ebff; }
 
+/* ============================================================
+   版塊輪動選股流程（三階段漏斗）
+   ------------------------------------------------------------
+   為什麼分成兩個區塊而不是塞進一張大表：
+   階段一輸出 11 個版塊、階段二輸出 4 個漏斗數字，兩者維度完全不同
+   （一個是「誰強」、一個是「剩多少」）。硬塞進同一張表會逼使用者
+   自己在腦中做 join，那正是我們想替他做掉的事。
+   ============================================================ */
+
+.sector-flow-wrap { margin: 0 0 18px; }
+.sf-block + .sf-block { margin-top: 20px; }
+.sf-block-title {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  margin: 0 0 9px; font-size: 13.5px; font-weight: 700; color: var(--text);
+}
+.sf-block-sub { font-size: 11.5px; font-weight: 500; color: var(--text-3); }
+.sf-verdict-line {
+  margin: 0 0 10px; font-size: 12.5px; color: var(--text-2); line-height: 1.75;
+}
+.sf-verdict-line strong { color: var(--text); }
+
+.sector-table { min-width: 640px; font-size: 12.5px; }
+.sector-table .sf-col-rank { width: 46px; }
+.sector-table .sf-col-sector { min-width: 120px; }
+.sector-table .sf-col-members { width: 82px; }
+.sector-table tbody tr.is-favored { background: #f4fbf7; }
+.sector-table tbody tr.is-favored:hover { background: #e9f8f1; }
+.sector-table tbody tr.is-avoid { opacity: .68; }
+
+/* 版塊代碼與中文名：代碼固定等寬、中文不換行，兩欄對齊才掃得快 */
+.sf-sector-cell { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.sf-sector-key {
+  font-family: var(--mono); font-weight: 700; font-size: 12px;
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--surface-2); color: var(--text);
+}
+.sf-sector-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.sf-sector-name { font-size: 12px; color: var(--text-2); }
+
+/* 判定標籤：優勢／觀察／迴避 */
+.sf-verdict {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.sfv-favored { background: #e9f8f1; color: #0b7a44; }
+.sfv-watch { background: #fdf6e3; color: #8a6212; }
+.sfv-avoid { background: var(--surface-2); color: var(--text-3); }
+
+/* 漏斗：每一層用縮排 + 數字靠右，讓「逐層收斂」在視覺上成立 */
+.funnel {
+  display: flex; flex-direction: column; gap: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface);
+}
+.funnel-row {
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  gap: 12px; padding: 9px 13px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.funnel-row:last-child { border-bottom: none; }
+.funnel-row.is-total { background: var(--surface-2); font-weight: 700; }
+.funnel-row.is-result { background: #f4fbf7; font-weight: 700; color: var(--text); }
+.funnel-row.is-warn { background: #fdf2f2; }
+.funnel-label { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
+.funnel-row.is-total .funnel-label,
+.funnel-row.is-result .funnel-label { color: var(--text); }
+.funnel-marker { font-family: var(--mono); color: var(--text-3); font-size: 11px; }
+.funnel-count {
+  font-family: var(--mono); font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.funnel-count .fc-note { font-family: inherit; font-weight: 500; font-size: 11px; color: var(--text-3); }
+
+.sf-coverage {
+  margin: 9px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.7;
+}
+.sf-coverage.is-warn { color: #b42318; font-weight: 600; }
+
+/* 表單裡的版塊開關列 */
+.sf-flow-row {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 0 0; border-top: 1px dashed var(--border); margin-top: 10px;
+}
+.sf-inline { display: flex; align-items: center; gap: 7px; }
+.sf-inline .sf-k { white-space: nowrap; }
+.sf-inline .sf-input { width: auto; min-width: 150px; }
+
+/* 明顯篩選表的版塊欄：只在版塊模式出現，因此預設隱藏由 JS 控制 */
+.screen-table th.st-sector,
+.screen-table td.st-sector { min-width: 96px; white-space: nowrap; }
+.screen-table th.st-sector-rank,
+.screen-table td.st-sector-rank { width: 74px; }
+.st-sector-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-2); white-space: nowrap;
+}
+
 .screen-note {
   margin: 12px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.7;
   background: var(--surface-2); border-radius: 7px; padding: 9px 11px;
@@ -4493,7 +4589,16 @@ div.fomc-next {
 }
 
 @media (max-width: 640px) {
-  .tr-op { min-height: 34px; padding: 5px 8px; font-size: 12px; }
+  /*
+   * 字級不得低於 12.5px。
+   *
+   * 這裡原本是 12px —— 為了在窄表格裡塞下兩個操作鈕（個股分析／加入觀察）
+   * 而壓縮字級。但 12px 是本專案自訂的可讀性下限之下（e2e 對整個追蹤頁
+   * 斷言「沒有小於 12.5px 的可見文字」），而且這兩個是**手機上最常按的
+   * 目標**，縮字最不該發生在這。改用 12.5px 並稍微收窄左右內距，
+   * 在 390px 下仍能完整顯示兩顆按鈕（實測無溢出）。
+   */
+  .tr-op { min-height: 34px; padding: 5px 7px; font-size: 12.5px; }
   .wt-table { min-width: 0; }
   .wt-table thead th.tr-src,
   .wt-table tbody td.tr-src { display: none; }   /* 手機上來源不是重點 */

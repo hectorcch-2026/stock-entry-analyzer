@@ -59,7 +59,12 @@
 //          （監聽 watchlist:changed）。這修的是「在觀察清單移出後，
 //          回推介頁按鈕仍寫著已加入」——只改 tracker.js / watchlist.js，
 //          但舊 shell 會供應舊的兩支，於是看起來像修好了其實沒有。
-const VERSION = 'v1.0.19';
+// v1.0.20：新增版塊輪動流程（index.html / screen.js / styles.css）——
+//          篩選頁多了「版塊輪動前置」勾選、優勢版塊表、漏斗與兩欄結果欄位。
+//          不升版的話舊 shell 會供應沒有這些元素的 index.html 與舊 screen.js，
+//          勾了「版塊輪動前置」也毫無反應，畫面看起來像功能沒做完。
+//          同時本次修掉手機版 .tr-op 字級 12px（低於 12.5px 可讀性下限）。
+const VERSION = 'v1.0.20';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;

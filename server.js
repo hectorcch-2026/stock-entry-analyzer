@@ -46,6 +46,7 @@ const econSync = require('./lib/econ-sync');
 const rrg = require('./lib/rrg');
 const rrgService = require('./lib/rrg-service');
 const sectorHoldings = require('./lib/sector-holdings');
+const sectorFlow = require('./lib/sector-flow');
 const treemap = require('./lib/treemap');
 const treemapService = require('./lib/treemap-service');
 const newsHub = require('./lib/news-hub');
@@ -626,6 +627,28 @@ const server = http.createServer(async (req, res) => {
       const raw = (q.symbol || q.s || '').trim();
       if (!raw) return sendError(res, 400, 'EMPTY', '請輸入股票代碼或名稱', '例如 AAPL、0700.HK、騰訊');
       const resolved = await resolveSymbol(raw);
+
+      /*
+       * 中概股一律不分析 —— 這是固定規則，不是可用參數。
+       *
+       * 為什麼連「使用者自己輸入」都要擋：
+       *   需求把「排除中概股」定為篩選流程的固定規則，並要求選股、回測、
+       *   分析都遵守。若只擋選股母體、放行單檔查詢，那「分析」這條路就
+       *   繞過了規則 —— 使用者直接打 BABA 就能拿到完整分析與推介判斷，
+       *   等於規則形同虛設。要嘛全部遵守，要嘛就不是固定規則。
+       *
+       * 為什麼「美股限定」反而不在這裡擋：
+       *   兩者的作用域不同。美股限定是**標的池的範圍**（決定「系統會主動
+       *   去篩哪些股票」）；個股查詢是使用者明確指名的單檔研究，而港股
+       *   詳細頁是既有功能（`#/detail/0700.HK`）。把兩者混為一談會讓
+       *   既有港股頁面直接壞掉，那不是需求要的「限制篩選範圍」。
+       */
+      if (pool.CHINA_ADR.has(pool.normalizeTicker(resolved.symbol))) {
+        return sendError(res, 403, 'EXCLUDED_CHINA_ADR',
+          `${resolved.symbol} 屬於在美上市中國概念股，已依固定規則排除`,
+          '標的池與分析流程皆不納入中概股；請改用其他標的');
+      }
+
       const data = await analyzer.analyze(resolved.symbol);
 
       /*
@@ -706,6 +729,154 @@ const server = http.createServer(async (req, res) => {
      * 讓前端能直接顯示，而不是丟一句「請求失敗」。
      */
     if (pathname === '/api/screen') {
+      /*
+       * 版塊輪動模式（sectorFlow=1）
+       * ────────────────────────────────────────────────────────
+       * 三階段漏斗：優勢版塊 → 動態標的池 → 個股選股。
+       *
+       * 為什麼用一個 query 開關而不是另開 /api/screen/sector-flow：
+       *   兩者的階段三完全相同（同一支 screener、同一組參數、同一種回應格式）。
+       *   另開端點等於把參數驗證、錯誤格式、快取邏輯各複製一份，
+       *   日後改篩選條件必然只改一邊。用開關讓「階段三只有一份實作」。
+       *
+       * 為什麼預設排序改用 sector：
+       *   使用者既然選擇了版塊流程，就要版塊優先的結果。若仍按個股評分排序，
+       *   第一鍵會是版塊名次但顯示順序看起來與一般篩選無異，等於流程白做。
+       *   仍可用 sortBy=score 明確覆寫，去看「不看版塊時誰最高分」。
+       */
+      const useSectorFlow = q.sectorFlow === '1' || q.sectorFlow === 'true';
+
+      if (useSectorFlow) {
+        const topN = sectorFlow.normTopN(q.sectorTopN);
+        const flow = await sectorFlow.buildSectorFlow({ datasource }, {
+          topN,
+          timeframe: q.timeframe || undefined,
+          benchmarkKey: q.benchmark || undefined,
+        });
+
+        /*
+         * 階段一或階段二失敗時**不降級成一般篩選**。
+         *
+         * 為什麼：使用者明确要求「版塊優先」。若版塊算不出來就默默回
+         * 全母體篩選，他會拿到一份沒有版塊依據的清單，卻以為那就是
+         * 版塊輪動的結果 —— 這是最糟的失敗模式（假成功）。
+         * 寧可明確回報失敗，並在 hint 說明可以改用一般篩選。
+         */
+        if (!flow.ok) {
+          return sendJSON(res, 200, {
+            ok: false,
+            sectorFlow: {
+              enabled: true,
+              topN,
+              stage: flow.stage || null,
+              code: flow.code || 'SECTOR_FLOW_FAILED',
+              message: flow.message || '版塊輪動流程無法完成',
+              hint: flow.hint || null,
+            },
+            sectors: flow.sectors || [],
+            rows: [],
+            stats: null,
+            poolSummary: pool.summary(),
+          });
+        }
+
+        // 動態池為空：版塊算得出來但裡面沒有母體成員，屬資料異常而非市場狀況
+        if (!flow.pool.symbols.length) {
+          return sendJSON(res, 200, {
+            ok: false,
+            sectorFlow: {
+              enabled: true,
+              topN,
+              stage: 'pool',
+              code: 'EMPTY_DYNAMIC_POOL',
+              message: '優勢版塊內沒有任何母體成員',
+              hint: `優勢版塊：${(flow.favoredSummary.picked || []).map((s) => s.key).join('、') || '無'}`,
+            },
+            sectors: flow.sectors,
+            favoredSummary: flow.favoredSummary,
+            funnel: flow.pool.funnel,
+            rows: [],
+            stats: null,
+            poolSummary: pool.summary(),
+          });
+        }
+
+        // 版塊歸屬對照表：注入 screener，讓每一列都帶 sector / sectorRank
+        const sectorMeta = new Map();
+        for (const s of flow.favoredSummary.picked) {
+          const key = String(s.key).toUpperCase();
+          for (const m of flow.pool.members) {
+            if (String(m.sector || '').toUpperCase() !== key) continue;
+            sectorMeta.set(m.symbol, {
+              key,
+              label: s.label,
+              rank: s.rank,
+              strengthScore: s.strengthScore,
+              quadrant: s.quadrant,
+            });
+          }
+        }
+
+        const query = { ...q };
+        // 未明確指定排序時，版塊流程預設版塊優先
+        if (q.sortBy === undefined || q.sortBy === '') query.sortBy = 'sector';
+        // 版塊流程的池已由階段二決定，這裡的 market 必須是 all 才不會
+        // 因為 market 條件把池內成員二次剔除（池內全是美股，但
+        // 篩選的 market 預設值也是 us，兩者一致；顯式傳 all 避免歧義）
+        query.market = 'all';
+
+        const out = await screener.screen(
+          { analyzer, forecast, datasource, symbols: flow.pool.symbols, sectorMeta },
+          query,
+          {
+            concurrency: Number(process.env.SCREEN_CONCURRENCY) || screener.DEFAULT_CONCURRENCY,
+            budgetMs: screener.budgetFromEnv(screener.DEFAULT_BUDGET_MS),
+          }
+        );
+        if (!out.ok) {
+          return sendError(res, 400, out.error.code, out.error.message);
+        }
+
+        /*
+         * 「已排除中概股」在版塊流程裡有兩層：
+         *   母體建立時（lib/pool.js）與篩選入口（lib/screener.js）。
+         * 版塊流程的池是從 pool.all() 取出的，母體已純化，所以
+         * 篩選入口的 chinaExcluded 必然是 0。若真的不是 0，代表有
+         * 程式碼繞過了母體直接注入 symbols —— 那是 bug，要看得見。
+         */
+        return sendJSON(res, 200, {
+          ...out,
+          // 版塊三階段結果：前端據此畫表 A（版塊）與表 B（漏斗）
+          sectorFlow: {
+            enabled: true,
+            topN: flow.topN,
+            timeframe: flow.timeframe,
+            benchmarkKey: flow.benchmarkKey,
+            period: flow.period,
+            asOf: flow.asOf,
+            favoredSummary: flow.favoredSummary,
+            funnel: flow.pool.funnel,
+            coverage: flow.coverage,
+            bySector: flow.pool.bySector,
+            excluded: flow.pool.excluded,
+            /*
+             * 需求要求「在輸出結果中標註已排除中概股，以及因而調整的標的數量」。
+             * 版塊流程的調整量發生在母體→動態池這一層，因此必須在這裡
+             * 明確標註「母體 500 皆為美股、已排除中概股」這件事，
+             * 否則使用者只看到 stats.chinaExcluded = 0 會誤解為「沒做排除」。
+             */
+            universeRule: {
+              chinaAdrExcluded: true,
+              note: '母體僅納入在美國交易所上市的個股，中概股（含在美上市中國概念股）一律排除',
+              source: pool.summary().source,
+              total: pool.summary().total,
+            },
+          },
+          sectors: flow.sectors,
+          poolSummary: pool.summary(),
+        });
+      }
+
       const norm = screener.normalizeOptions(q);
       if (!norm.ok) {
         return sendError(res, 400, norm.code, norm.message,
@@ -713,13 +884,17 @@ const server = http.createServer(async (req, res) => {
           + `requirePred、limit（1-200）、sortBy（${[...screener.SORTABLE].join('/')}）、sortDir（asc/desc）`);
       }
 
-      // 母體可限縮到單一市場，減少不必要的上游請求
+      // 母體僅美股；market=hk 會回空陣列（母體已不含港股）
       const symbols = pool.byMarket(norm.opts.market);
       const p = pool.summary();
       if (!symbols.length) {
         return sendJSON(res, 200, {
           ok: true, opts: norm.opts, rows: [],
-          stats: { pool: 0, checked: 0, passed: 0, returned: 0, excluded: 0, failed: 0, excludeReasons: [], notes: ['此市場在標的池中沒有成員'] },
+          stats: {
+            pool: 0, checked: 0, passed: 0, returned: 0, excluded: 0, failed: 0,
+            excludeReasons: [],
+            notes: ['標的池僅納入在美國交易所上市的個股，因此 market=hk 沒有成員'],
+          },
           poolSummary: p,
         });
       }
@@ -727,7 +902,10 @@ const server = http.createServer(async (req, res) => {
       const out = await screener.screen(
         { analyzer, forecast, datasource, symbols },
         q,
-        { concurrency: Number(process.env.SCREEN_CONCURRENCY) || screener.DEFAULT_CONCURRENCY }
+        {
+          concurrency: Number(process.env.SCREEN_CONCURRENCY) || screener.DEFAULT_CONCURRENCY,
+          budgetMs: screener.budgetFromEnv(screener.DEFAULT_BUDGET_MS),
+        }
       );
       if (!out.ok) {
         return sendError(res, 400, out.error.code, out.error.message);
@@ -1464,8 +1642,10 @@ const server = http.createServer(async (req, res) => {
       let limit = 10;
       if (limitRaw != null && limitRaw !== '') {
         const n = Number(limitRaw);
-        if (!Number.isFinite(n) || n < 1 || n > 50) {
-          return sendError(res, 400, 'BAD_LIMIT', `limit 必須是 1–50 的整數（收到「${limitRaw}」）`,
+        // 上限跟著 sector-holdings.MAX_HOLDINGS 走，不再另外寫死 50
+        if (!Number.isFinite(n) || n < 1 || n > sectorHoldings.MAX_HOLDINGS) {
+          return sendError(res, 400, 'BAD_LIMIT',
+            `limit 必須是 1–${sectorHoldings.MAX_HOLDINGS} 的整數（收到「${limitRaw}」）`,
             '不帶此參數時預設列出前 10 大權重股');
         }
         limit = Math.floor(n);
@@ -2029,7 +2209,14 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`  服務已啟動： http://0.0.0.0:${PORT}`);
   console.log(`  Telegram 通知： ${telegram.isConfigured() ? '已設定' : '未設定（模擬模式）'}`);
   const ps = pool.summary();
-  console.log(`  選股母體： ${ps.total} 檔（港股 ${ps.hk} / 美股 ${ps.us}）`);
+  console.log(`  選股母體： ${ps.total} 檔（美股 ${ps.us} / 港股 ${ps.hk}，來源 ${ps.source}）`);
+  if (ps.excluded && ps.excluded.chinaAdr) {
+    console.log(`  中概股排除： ${ps.excluded.chinaAdr.count} 檔（固定規則，篩選/回測/分析皆適用）`);
+  }
+  if (ps.degraded) {
+    // 母體快照遺失會讓池子悄悄縮小，不講出來沒人會發現
+    console.log(`  ⚠ 母體快照不可用：${ps.degradedReason}`);
+  }
   console.log(`  資料來源： Yahoo Finance\n`);
 
   // 推介追蹤帳本：啟動時就已載入，這裡只回報狀態
