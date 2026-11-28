@@ -84,7 +84,7 @@ npm run test:hidden     # hidden 可見性：4 項
 | `lib/kline.js` | 119 | 時間區間 K 線取數（`3m`–`5y`），獨立在 `/api/analyze` 的 250 根上限之外 |
 | `lib/screener.js` | 453 | 篩選引擎：參數驗證、有界併發、過濾排序、統計彙整 |
 | `lib/credibility.js` | 267 | 統計可信度（校準／樣本量／資料品質加權）＋ 區間位置幾何描述 |
-| `lib/pool.js` | 60 | 標的池（154 檔 = 港股 70 + 美股 84），由 `lib/alias.js` 推導 |
+| `lib/pool.js` | 240 | 標的池（**500 檔，純美股**，來源 `lib/pool-us-500.json`）；含中概股排除閘門 |
 | `lib/scheduler.js` | 214 | 每日清單排程（含惰性補跑與每日檔案鎖） |
 | `public/common.js` | 212 | 共用工具 + 雜湊路由（`#/predict`、`#/screen`、`#/detail/:symbol`） |
 | `public/screen.js` | 586 | 選股頁：表單、篩選、排序、空狀態、錯誤態、每日清單 |
