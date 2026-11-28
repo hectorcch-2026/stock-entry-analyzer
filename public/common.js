@@ -144,7 +144,7 @@
    *   併進詳情頁會導致換一檔股票就重抓一次 FRED，且兩者的失敗模式
    *   完全不同（K 線逾時 vs SEC 逾時），混在一起會互相牽連。
    */
-  var ROUTES = { predict: 'predict', screen: 'screen', macro: 'macro', rrg: 'rrg', detail: 'detail' };
+  var ROUTES = { predict: 'predict', screen: 'screen', macro: 'macro', rrg: 'rrg', watch: 'watch', detail: 'detail' };
 
   function parseHash() {
     var h = String(location.hash || '').replace(/^#\/?/, '');
@@ -153,6 +153,7 @@
     var head = parts[0];
     if (head === 'screen') return { name: 'screen', symbol: null };
     if (head === 'tracker') return { name: 'tracker', symbol: null };
+    if (head === 'watch') return { name: 'watch', symbol: null };
     if (head === 'rrg') return { name: 'rrg', symbol: null };
     if (head === 'macro') {
       return { name: 'macro', symbol: parts[1] ? decodeURIComponent(parts[1]) : null };
@@ -173,7 +174,7 @@
     });
   }
 
-  var handlers = { onPredict: null, onScreen: null, onTracker: null, onMacro: null, onRrg: null, onDetail: null };
+  var handlers = { onPredict: null, onScreen: null, onTracker: null, onWatch: null, onMacro: null, onRrg: null, onDetail: null };
 
   /** 由 app.js / screen.js / macro.js 註冊各自的進場處理 */
   SA.onRoute = function (map) {
@@ -193,11 +194,13 @@
     var tracker = document.getElementById('viewTracker');
     var macro = document.getElementById('viewMacro');
     var rrgView = document.getElementById('viewRrg');
+    var watch = document.getElementById('viewWatch');
     if (chart) chart.hidden = name !== 'chart';
     if (screen) screen.hidden = name !== 'screen';
     if (tracker) tracker.hidden = name !== 'tracker';
     if (macro) macro.hidden = name !== 'macro';
     if (rrgView) rrgView.hidden = name !== 'rrg';
+    if (watch) watch.hidden = name !== 'watch';
   }
 
   var lastDispatched = '';
@@ -206,7 +209,8 @@
     var r = parseHash();
     var view = r.name === 'screen' ? 'screen'
       : (r.name === 'tracker' ? 'tracker'
-        : (r.name === 'macro' ? 'macro' : (r.name === 'rrg' ? 'rrg' : 'chart')));
+        : (r.name === 'macro' ? 'macro'
+          : (r.name === 'rrg' ? 'rrg' : (r.name === 'watch' ? 'watch' : 'chart'))));
     showView(view);
     setActiveNav(r.name);
     var sig = r.name + '|' + (r.symbol || '');
@@ -218,6 +222,7 @@
     else if (r.name === 'tracker' && handlers.onTracker) handlers.onTracker();
     else if (r.name === 'macro' && handlers.onMacro) handlers.onMacro(r.symbol);
     else if (r.name === 'rrg' && handlers.onRrg) handlers.onRrg();
+    else if (r.name === 'watch' && handlers.onWatch) handlers.onWatch();
     else if (r.name === 'detail' && handlers.onDetail) handlers.onDetail(r.symbol);
     else if (r.name === 'predict' && handlers.onPredict) handlers.onPredict();
   }

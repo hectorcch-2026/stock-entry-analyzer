@@ -4414,3 +4414,248 @@ div.fomc-next {
     color: #fff;
   }
 }
+
+/* ==========================================================
+   操作欄（推介追蹤）與觀察清單頁
+   ----------------------------------------------------------
+   為什麼操作欄按鈕做得比一般連結小：
+     表格已經有 13 欄，操作欄只是「順手可用」的輔助，
+     不該因為按鈕太大而把價格欄擠到看不見。
+     但觸控目標仍維持 32px 高度（手機上手指不會誤觸）。
+   ========================================================== */
+.tr-table thead th.tr-ops { text-align: right; white-space: nowrap; }
+.tr-ops { white-space: nowrap; text-align: right; }
+
+.tr-op {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 10px;
+  margin-left: 6px;
+  font-size: 12.5px;
+  font-family: inherit;
+  line-height: 1.2;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.tr-op:hover { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.tr-op:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.tr-op[disabled] { opacity: .6; cursor: default; }
+
+/* 已加入：用實心表示「已達成」，而不是只把文字改掉——
+   只改文字在窄表格裡很容易被忽略。 */
+.tr-op-watch.is-on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.tr-op-watch.is-on:hover { background: var(--brand); color: #fff; }
+
+.tr-op-remove { color: var(--text-3); }
+.tr-op-remove:hover { background: #fdeaea; border-color: #d92b2b; color: #b31b1b; }
+
+/* ---------- 觀察清單頁 ---------- */
+.wt-intro {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.wt-intro strong { color: var(--text); }
+
+.wt-table { min-width: 620px; }
+.wt-table thead th.tr-src { text-align: left; }
+.tr-src { font-size: 12.5px; }
+.wt-src-pick {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.wt-src-manual { color: var(--text-3); font-style: italic; }
+
+/* 代碼本身就是連結（在觀察清單裡，最常見的動作就是點進去看） */
+.wt-link { text-decoration: none; }
+.wt-link:hover { text-decoration: underline; color: var(--brand); }
+
+.wt-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 4px;
+  color: var(--text-3);
+  font-size: 13.5px;
+}
+
+@media (max-width: 640px) {
+  .tr-op { min-height: 34px; padding: 5px 8px; font-size: 12px; }
+  .wt-table { min-width: 0; }
+  .wt-table thead th.tr-src,
+  .wt-table tbody td.tr-src { display: none; }   /* 手機上來源不是重點 */
+}
+
+/* ---------- 推薦依據（展開列） ---------- */
+/* 展開列用滿整列寬度，不要讓內容被表格欄寬切碎。
+   圖在左、文字在右：使用者先看「長什麼樣」，再看「為什麼」。 */
+.tr-basis-row > td { padding: 0; background: var(--surface-2, #f7f8fa); }
+.tr-basis {
+  display: grid;
+  grid-template-columns: minmax(320px, 460px) minmax(260px, 1fr);
+  gap: 22px;
+  padding: 16px 18px 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.tr-basis-chart { min-width: 0; }
+.tr-basis-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.tr-basis-legend {
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+.tr-basis-info { min-width: 0; }
+
+.tr-basis-reason { margin: 0 0 12px; }
+.tr-basis-reason h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tr-basis-reason p {
+  margin: 0;
+  font-size: 12.8px;
+  line-height: 1.72;
+  color: var(--text-2);
+}
+
+.tr-basis-params,
+.tr-basis-breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+}
+.tr-basis-params th,
+.tr-basis-breakdown th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 3px 10px 3px 0;
+  white-space: nowrap;
+  width: 42%;
+}
+.tr-basis-params td,
+.tr-basis-breakdown td {
+  padding: 3px 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tr-basis-hint {
+  margin-left: 7px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: 400;
+}
+/* 分項得分的長條：一眼看出「哪一項拉低了總分」 */
+.tr-basis-bar {
+  width: 84px;
+  padding-left: 10px !important;
+}
+.tr-basis-bar > span {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--brand);
+  min-width: 1px;
+}
+
+.tr-basis-news {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+}
+.tr-basis-news-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 5px;
+}
+.tr-basis-senti {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-2, #eef0f3);
+  color: var(--text-2);
+}
+.tr-basis-senti.is-bull { background: #fdeaea; color: #b31b1b; }   /* 漲紅 */
+.tr-basis-senti.is-bear { background: #e8f5ee; color: #0b7a44; }   /* 跌綠 */
+.tr-basis-news-sum {
+  margin: 0;
+  font-size: 12.6px;
+  line-height: 1.72;
+  color: var(--text-2);
+}
+.tr-basis-news-list {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+
+@media (max-width: 860px) {
+  .tr-basis { grid-template-columns: 1fr; gap: 14px; padding: 14px; }
+}
+
+/* ---------- 推薦依據（個股詳情頁） ---------- */
+.rec-basis-card { margin-bottom: 18px; }
+.rec-basis-body {
+  display: grid;
+  grid-template-columns: minmax(300px, 440px) minmax(260px, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.rec-basis-chart { min-width: 0; }
+.rec-basis-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.rec-basis-legend {
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+.rec-basis-info { min-width: 0; }
+.rec-basis-reason { margin: 0 0 12px; }
+.rec-basis-reason h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+.rec-basis-reason p { margin: 0; font-size: 12.8px; line-height: 1.72; color: var(--text-2); }
+
+@media (max-width: 860px) {
+  .rec-basis-body { grid-template-columns: 1fr; gap: 14px; }
+}

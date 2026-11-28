@@ -60,6 +60,8 @@ const ratesForecast = require('./lib/rates-forecast');
 const picksTracker = require('./lib/picks-tracker');
 const trackerJobMod = require('./lib/tracker-job');
 const trackerNotify = require('./lib/tracker-notify');
+const watchlist = require('./lib/watchlist');
+const candleChart = require('./lib/candle-chart');
 
 /* ==========================================================
    推介追蹤的單例
@@ -81,6 +83,17 @@ const trackerStore = picksTracker.create({
 const trackerLoad = trackerStore.load();
 const trackerTracker = picksTracker;   // 供 STATUS_LABEL 等常數使用
 
+/* ---- 觀察清單（使用者自己標記「先盯著」的股票） ----
+   與帳本分開的理由見 lib/watchlist.js 的檔頭：帳本記系統的決策、
+   觀察清單記使用者的意向，兩者混在一起會讓「使用者亂點」變成
+   「帳本有異動」，而帳本是要拿來算勝率的。
+   一樣在啟動時就 load：延遲載入會讓第一次開頁看到空清單。 */
+const watchStore = watchlist.create();
+const watchLoad = watchStore.load();
+if (watchLoad.corrupt) {
+  console.log(`[watchlist] 檔案曾損壞，已備份：${watchStore.stats().recovered?.backup || '（無備份）'}`);
+}
+
 /**
  * 每日任務。這裡才注入 scheduler 與 screener：
  * trackerStore 在檔案上方就建立了，但那時 pool / screener 還沒載入，
@@ -99,6 +112,10 @@ const trackerJob = trackerJobMod.createJob({
   screenDeps: { analyzer, forecast, datasource, symbols: pool.byMarket('all') },
   runner: screener,
   notifier: trackerNotifier,
+  /* 新聞 AI 摘要：建立推介時順手記下「當時的新聞怎麼說」。
+     沒注入也能運作（摘要留 null），所以不必讓它成為啟動的必要條件。 */
+  newsHub,
+  aiAnalyst,
 });
 
 const PORT = process.env.PORT || 5177;
@@ -799,7 +816,8 @@ const server = http.createServer(async (req, res) => {
          第一次有人開頁會更新，30 分鐘內再開就直接讀檔。
        ========================================================== */
 
-    if (pathname === '/api/tracker' || pathname === '/api/tracker/status') {
+    if (pathname === '/api/tracker' || pathname === '/api/tracker/status'
+        || pathname === '/api/tracker/chart.png') {
       const force = q.run === '1' || q.force === '1';
       const previewOnly = q.preview === '1';
       const token = process.env.PICKS_TOKEN || '';
@@ -831,9 +849,44 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 200, { ok: true, notify: result });
       }
 
+      /* ---- 單筆推介的 K 線圖（PNG）----
+         需求要的是「在圖上標示推介／止蝕／止賺的日期與價位，方便比較」，
+         而這張圖原本只在 Telegram 推送時產生——沒設 bot token 的人
+         等於看不到。這裡讓網頁也能直接取同一張圖。
+
+         為什麼是 PNG 而不是在瀏覽器用 canvas 重畫：
+           同一份資料、同一個繪圖程式，網頁與手機看到的圖必然一致。
+           若前端自己再畫一次，兩邊的座標邏輯遲早會分岔，
+           而「圖上日期位置對不上」這種錯沒人會發現。
+
+         只讀：不寫檔、不發訊息，所以不需要 token。 */
+      if (pathname === '/api/tracker/chart.png') {
+        const sym = String(q.symbol || '').trim().toUpperCase();
+        if (!sym) {
+          return sendError(res, 400, 'BAD_SYMBOL', '缺少 symbol 參數', '例如 /api/tracker/chart.png?symbol=AAPL');
+        }
+        const rec = trackerStore.list({ symbol: sym, limit: 1 })[0];
+        if (!rec) {
+          return sendError(res, 404, 'NOT_FOUND', `帳本裡沒有 ${sym} 的推介記錄`,
+            '只有被推介過的股票才有這張圖；想單看走勢請用個股分析頁。');
+        }
+        const chart = await trackerNotifier.chartFor(rec);
+        if (!chart || !chart.ok || !chart.png) {
+          return sendError(res, 502, 'CHART_UNAVAILABLE',
+            `無法取得 ${sym} 的 K 線圖`,
+            (chart && chart.error) || '上游行情暫時不可用，請稍後重試。');
+        }
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          // 圖會隨每日更新變動，但同一分鐘內重複請求不必重打上游
+          'Cache-Control': 'public, max-age=60',
+          'Content-Length': chart.png.length,
+        });
+        return res.end(chart.png);
+      }
+
       // status 端點只回狀態，不跑任何東西
-      if (pathname === '/api/tracker/status') {
-        const payload = {
+      if (pathname === '/api/tracker/status') {        const payload = {
           ok: true,
           job: trackerJob.status(),
           ledger: trackerStore.stats(),
@@ -867,13 +920,23 @@ const server = http.createServer(async (req, res) => {
       const rows = trackerStore.list(listOpts);
       const sum = trackerStore.summary();
 
+      /* 每筆推介標上「是否已在觀察清單」。
+         為什麼在後端算：前端若逐筆查會變成 N 次請求，或得自己
+         維護一份可能過期的鏡像。後端有唯一真相（watchStore），
+         一次算完回傳最省事也最不會不一致。 */
+      const watchSet = watchStore.symbolSet();
+      const rowsWithWatch = rows.map((r) => ({
+        ...r,
+        watched: watchSet.has(String(r.symbol || '').toUpperCase()),
+      }));
+
       return sendJSON(res, 200, {
         ok: true,
         updated: jobResult,
         // 帳本
         summary: sum,
-        count: rows.length,
-        records: rows,
+        count: rowsWithWatch.length,
+        records: rowsWithWatch,
         // 前端下拉用：帳本裡出現過的推介日期（新到舊）
         dates: [...new Set(trackerStore.records.map((r) => r.pickDate))].sort().reverse(),
         statusLabel: trackerTracker.STATUS_LABEL,
@@ -886,6 +949,67 @@ const server = http.createServer(async (req, res) => {
           capitalUsd: trackerStore.capitalUsd,
           note: '每次有人開啟本頁會檢查是否該更新；30 分鐘內重複開啟直接讀檔。已結案的記錄永不重算。',
         },
+      });
+    }
+
+    /* ==========================================================
+       觀察清單（Watchlist）
+       ----------------------------------------------------------
+       端點：
+         GET    /api/watchlist               清單（含每檔的即時資訊？不，見下）
+         POST   /api/watchlist               加入 { symbol, name?, market?, currency?, fromPick? }
+         DELETE /api/watchlist?symbol=XXX    移出
+
+       為什麼「加入」用 POST 而不是 GET：
+         它會改變持久狀態。用 GET 會讓瀏覽器預抓、快取、或使用者
+         在網址列按 Enter 重送，都是不該發生副作用的時機。
+
+       為什麼 GET 不順便抓即時報價：
+         觀察清單可能有數十檔，每檔一次上游請求會讓這個端點變慢且脆弱
+         （任一檔逾時就整頁卡住）。清單本身只回「使用者存了什麼」，
+         報價由前端各自決定要不要抓。
+       ========================================================== */
+    if (pathname === '/api/watchlist') {
+      if (req.method === 'POST') {
+        let body;
+        try {
+          body = JSON.parse((await readBody(req)) || '{}');
+        } catch (e) {
+          return sendError(res, 400, 'BAD_JSON', '請求內容不是合法的 JSON');
+        }
+        const r = watchStore.add(body, { fromPick: body.fromPick });
+        if (!r.added && r.reason && r.reason.indexOf('已在觀察清單') === -1) {
+          // 只有「真的失敗」才回 400；重複加入是正常結果
+          return sendError(res, 400, 'BAD_SYMBOL', r.reason);
+        }
+        if (r.added) watchStore.save();
+        return sendJSON(res, 200, {
+          ok: true,
+          added: r.added,
+          reason: r.reason || null,
+          item: r.item || null,
+          count: watchStore.stats().count,
+        });
+      }
+
+      if (req.method === 'DELETE') {
+        const sym = q.symbol || '';
+        const r = watchStore.remove(sym);
+        if (!r.removed) {
+          return sendError(res, 404, 'NOT_IN_WATCHLIST', r.reason || '不在觀察清單', '請確認代碼是否正確');
+        }
+        watchStore.save();
+        return sendJSON(res, 200, {
+          ok: true, removed: true, item: r.item, count: watchStore.stats().count,
+        });
+      }
+
+      const items = watchStore.list();
+      return sendJSON(res, 200, {
+        ok: true,
+        count: items.length,
+        items,
+        stats: watchStore.stats(),
       });
     }
 

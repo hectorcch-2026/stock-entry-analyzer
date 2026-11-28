@@ -14,6 +14,9 @@
   var $ = function (id) { return document.getElementById(id); };
   var fmt = SA.fmt, esc = SA.esc;
 
+  /** 觀察清單變動的監聽只綁一次（bindEvents 會在每次進頁面時被呼叫） */
+  var watchSyncBound = false;
+
   var state = {
     loaded: false,
     loading: false,
@@ -143,7 +146,9 @@
     $('trListBadge').textContent = rows.length + ' 筆';
 
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="12" class="tr-none">此狀態目前沒有記錄</td></tr>';
+      // colspan 必須等於實際欄數（含新增的「操作」欄共 13 欄）。
+      // 少算會讓「此狀態沒有記錄」擠在第一欄，整列看起來歪掉。
+      body.innerHTML = '<tr><td colspan="13" class="tr-none">此狀態目前沒有記錄</td></tr>';
       return;
     }
 
@@ -183,6 +188,32 @@
       var curTag = r.currency && r.currency !== 'USD'
         ? '<span class="tr-cur">' + esc(r.currency) + '</span>' : '';
 
+      /* 操作欄：加入觀察 + 個股分析。
+         「個股分析」用 <a href="#/detail/…"> 而不是 onclick 導頁，
+         這樣使用者可以右鍵「在新分頁開啟」、也可以複製連結分享——
+         用 JS 導頁會把這兩件事一起弄丟。
+         「加入觀察」依 r.watched（後端算好的）決定初始狀態，
+         不靠前端猜，否則重新整理後按鈕會顯示錯的狀態。 */
+      var watched = !!r.watched;
+      /* 「推薦依據」按鈕：只有在真的有存到依據時才出現。
+         舊記錄（這個功能上線前建立的）沒有 reasons/params，
+         對它們顯示一顆按了只會看到「無資料」的按鈕是誤導。 */
+      var hasBasis = (Array.isArray(r.reasons) && r.reasons.length)
+        || (r.params && (r.params.rrRatio != null || (r.params.breakdown || []).length))
+        || (r.newsAi && r.newsAi.summary);
+      var ops = '<td class="tr-ops">'
+        + '<a class="tr-op tr-op-detail" href="#/detail/' + encodeURIComponent(r.symbol) + '">個股分析</a>'
+        + (hasBasis
+          ? '<button type="button" class="tr-op tr-op-basis" data-act="basis" data-symbol="'
+            + esc(r.symbol) + '" data-id="' + esc(r.id) + '" aria-expanded="false">推薦依據</button>'
+          : '')
+        + '<button type="button" class="tr-op tr-op-watch' + (watched ? ' is-on' : '') + '"'
+        + ' data-act="watch" data-symbol="' + esc(r.symbol) + '"'
+        + ' aria-pressed="' + (watched ? 'true' : 'false') + '">'
+        + (watched ? '已加入觀察' : '加入觀察')
+        + '</button>'
+        + '</td>';
+
       html.push(
         '<tr class="tr-row" data-id="' + esc(r.id) + '">'
         + '<td class="tr-sym">'
@@ -200,10 +231,145 @@
         + '<td class="num ' + clsOfNum(rp) + '">' + (rp == null ? '—' : fmtPct(rp)) + '</td>'
         + '<td class="num">' + hold + '</td>'
         + '<td class="tr-state"><span class="' + statusCls(r.status) + '">' + esc(label) + '</span></td>'
+        + ops
+        + '</tr>'
+        + '<tr class="tr-basis-row" data-basis-for="' + esc(r.id) + '" hidden>'
+        + '<td colspan="13" class="tr-basis-cell"></td>'
         + '</tr>'
       );
     });
     body.innerHTML = html.join('');
+    // 重繪後如果有展開過的列，把它的內容補回來（否則一按「更新現價」就收起來）
+    if (expandedId) fillBasisRow(expandedId);
+  }
+
+  /* ==================== 推薦依據 ==================== */
+
+  /** 目前展開的是哪一筆（重繪後要能還原） */
+  var expandedId = null;
+
+  function paramsTable(p) {
+    if (!p) return '';
+    var rows = [];
+    function add(k, v, hint) {
+      if (v == null || v === '') return;
+      rows.push('<tr><th>' + esc(k) + '</th><td>' + esc(String(v))
+        + (hint ? '<span class="tr-basis-hint">' + esc(hint) + '</span>' : '') + '</td></tr>');
+    }
+    add('盈虧比', p.rrRatio != null ? fmt(p.rrRatio, 2) : null, '潛在報酬 ÷ 風險，越高越值得做');
+    add('距買區（ATR）', p.distAtr != null ? fmt(p.distAtr, 2) : null, '現價距買區上緣的波動倍數');
+    add('波動（ATR%）', p.atrPct != null ? fmt(p.atrPct, 2) + '%' : null);
+    add('平均成交量', p.avgVol != null ? fmt(p.avgVol, 0) : null);
+    add('20 日勝率', p.winRate20 != null ? fmt(p.winRate20, 1) + '%' : null,
+      p.samples ? '樣本 ' + p.samples + ' 次' : null);
+    add('20 日上漲機率', p.probUp20 != null ? fmt(p.probUp20, 1) + '%' : null);
+    add('獲利機率', p.probProfit != null ? fmt(p.probProfit, 1) + '%' : null);
+    add('基準機率', p.baseRate20 != null ? fmt(p.baseRate20, 1) + '%' : null, '同期大盤的上漲機率');
+    if (!rows.length) return '';
+    return '<table class="tr-basis-params"><tbody>' + rows.join('') + '</tbody></table>';
+  }
+
+  function breakdownTable(list) {
+    if (!Array.isArray(list) || !list.length) return '';
+    var rows = list.map(function (d) {
+      var s = d.s == null ? '—' : fmt(d.s, 1);
+      var m = d.m == null ? '' : ' / ' + fmt(d.m, 1);
+      var pct = (d.s != null && d.m) ? Math.max(0, Math.min(100, (d.s / d.m) * 100)) : 0;
+      return '<tr><th>' + esc(d.l || d.k || '') + '</th>'
+        + '<td class="num">' + esc(s + m) + '</td>'
+        + '<td class="tr-basis-bar"><span style="width:' + pct.toFixed(0) + '%"></span></td></tr>';
+    });
+    return '<table class="tr-basis-breakdown"><tbody>' + rows.join('') + '</tbody></table>';
+  }
+
+  function newsBlock(n) {
+    if (!n || !n.summary) return '';
+    var senti = n.sentiment ? String(n.sentiment) : '';
+    var sentiCls = /負|bear|neg/i.test(senti) ? 'is-bear' : (/正|bull|pos/i.test(senti) ? 'is-bull' : '');
+    var head = (n.headlines || []).slice(0, 5).map(function (h) {
+      return '<li>' + esc(h) + '</li>';
+    }).join('');
+    return '<div class="tr-basis-news">'
+      + '<div class="tr-basis-news-head">推薦當時新聞 AI 摘要'
+      + (senti ? '<span class="tr-basis-senti ' + sentiCls + '">' + esc(senti) + '</span>' : '')
+      + (n.newsCount ? '<span class="tr-basis-hint">共 ' + n.newsCount + ' 則</span>' : '')
+      + '</div>'
+      + '<p class="tr-basis-news-sum">' + esc(n.summary) + '</p>'
+      + (head ? '<ul class="tr-basis-news-list">' + head + '</ul>' : '')
+      + '</div>';
+  }
+
+  function reasonsBlock(list) {
+    if (!Array.isArray(list) || !list.length) return '';
+    return '<div class="tr-basis-reasons">' + list.map(function (p) {
+      return '<div class="tr-basis-reason">'
+        + (p.title ? '<h4>' + esc(p.title) + '</h4>' : '')
+        + (p.body ? '<p>' + esc(p.body) + '</p>' : '')
+        + '</div>';
+    }).join('') + '</div>';
+  }
+
+  /** 把某一筆的依據內容填進它那一列（含 K 線圖） */
+  function fillBasisRow(id) {
+    var row = $('trBody').querySelector('[data-basis-for="' + String(id).replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    var cell = row.querySelector('.tr-basis-cell');
+    if (!cell) return;
+    var rec = null;
+    for (var i = 0; i < state.records.length; i += 1) {
+      if (state.records[i].id === id) { rec = state.records[i]; break; }
+    }
+    if (!rec) return;
+
+    var sym = rec.symbol;
+    var legend = ['P 推介 ' + (rec.pickDate || '—')];
+    if (rec.entry && rec.entry.date) legend.push('B 進場 ' + rec.entry.date);
+    if (rec.exit && rec.exit.date) {
+      legend.push('X ' + (rec.status === 'target_hit' ? '止賺' : '止蝕') + ' ' + rec.exit.date);
+    }
+
+    /* 注意：這裡的條件必須用括號包起來。
+       `'x' + cond ? a : b` 會被解析成 `('x' + cond) ? a : b`——
+       字串永遠為真，於是永遠走 a，而且最後的 </div> 會被吞掉。 */
+    var emptyNote = (!rec.reasons || !rec.reasons.length) && !rec.newsAi
+      ? '<p class="tr-basis-hint">這一筆沒有存到推薦依據（可能是功能上線前的舊記錄）。</p>'
+      : '';
+
+    cell.innerHTML = '<div class="tr-basis">'
+      + '<div class="tr-basis-chart">'
+      + '<img class="tr-basis-img" alt="' + esc(sym) + ' K 線圖（含推介與出場標記）"'
+      + ' src="/api/tracker/chart.png?symbol=' + encodeURIComponent(sym) + '&t=' + Date.now() + '">'
+      + '<div class="tr-basis-legend">' + esc(legend.join('　')) + '</div>'
+      + '</div>'
+      + '<div class="tr-basis-info">'
+      + reasonsBlock(rec.reasons)
+      + paramsTable(rec.params)
+      + breakdownTable(rec.params && rec.params.breakdown)
+      + newsBlock(rec.newsAi)
+      + emptyNote
+      + '</div>'
+      + '</div>';
+  }
+
+  function toggleBasis(btn) {
+    var id = btn.getAttribute('data-id');
+    var row = $('trBody').querySelector('[data-basis-for="' + String(id).replace(/"/g, '\\"') + '"]');
+    if (!row) return;
+    var open = row.hidden;
+    // 一次只開一筆：同時展開多筆會讓表格長到看不出自己在看哪一行
+    var all = $('trBody').querySelectorAll('.tr-basis-row');
+    for (var i = 0; i < all.length; i += 1) all[i].hidden = true;
+    var allBtns = $('trBody').querySelectorAll('[data-act="basis"]');
+    for (var j = 0; j < allBtns.length; j += 1) allBtns[j].setAttribute('aria-expanded', 'false');
+
+    if (open) {
+      fillBasisRow(id);
+      row.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      expandedId = id;
+    } else {
+      expandedId = null;
+    }
   }
 
   function renderFilterNote(res) {
@@ -353,6 +519,104 @@
     if (boot) {
       boot.onclick = function () { load({ force: true }); };
     }
+
+    /* 表格內的「加入觀察」用事件委派，不要逐列綁 onclick：
+       表格每次重繪都換掉整批 DOM，逐列綁會綁到已經被丟棄的節點上
+       （症狀：按了沒反應，而且沒有任何錯誤）。 */
+    var body = $('trBody');
+    if (body && !body.dataset.watchBound) {
+      body.dataset.watchBound = '1';
+      body.addEventListener('click', function (e) {
+        var basis = e.target.closest ? e.target.closest('[data-act="basis"]') : null;
+        if (basis) {
+          e.preventDefault();
+          toggleBasis(basis);
+          return;
+        }
+        var btn = e.target.closest ? e.target.closest('[data-act="watch"]') : null;
+        if (!btn) return;
+        e.preventDefault();
+        addToWatch(btn.getAttribute('data-symbol'), btn);
+      });
+    }
+
+    /* 清單在別的視圖（觀察清單頁）被改動後，這裡的按鈕要跟著改。
+       少了這段，使用者在觀察清單按「移出觀察」再回到推介頁，
+       按鈕還是寫著「已加入觀察」——按下去只會被導去觀察清單，
+       而他以為那檔還在清單裡。
+       只更新相關那一列，不整表重繪：整表重繪會讓捲動位置跳掉。 */
+    if (!watchSyncBound) {
+      watchSyncBound = true;
+      document.addEventListener('watchlist:changed', function (ev) {
+        var d = (ev && ev.detail) || {};
+        var box = $('trBody');
+        if (!box) return;
+        var items = d.items || null;
+        // 整份清單有變動（例如剛載入完）：對所有按鈕重新對帳
+        var targets;
+        if (!d.symbol) {
+          targets = [].slice.call(box.querySelectorAll('[data-act="watch"]'));
+          if (!targets.length) return;
+        } else {
+          var one = box.querySelector('[data-act="watch"][data-symbol="' + String(d.symbol).replace(/"/g, '\\"') + '"]');
+          targets = one ? [one] : [];
+        }
+        targets.forEach(function (btn) {
+          var sym = String(btn.getAttribute('data-symbol') || '').toUpperCase();
+          // 有帶清單就以清單為準；沒帶才退回模組內已知的狀態
+          var inList = items
+            ? items.some(function (x) { return String(x.symbol || '').toUpperCase() === sym; })
+            : (SA.watchlist && SA.watchlist.has(sym));
+          btn.classList.toggle('is-on', !!inList);
+          btn.setAttribute('aria-pressed', inList ? 'true' : 'false');
+          btn.textContent = inList ? '已加入觀察' : '加入觀察';
+          btn.disabled = false;
+          for (var i = 0; i < state.records.length; i += 1) {
+            if (String(state.records[i].symbol || '').toUpperCase() === sym) {
+              state.records[i].watched = !!inList;
+              break;
+            }
+          }
+        });
+      });
+    }
+  }
+
+  /** 把某一筆推介加入觀察清單（樂觀更新：先改按鈕，失敗再回滾） */
+  function addToWatch(symbol, btn) {
+    if (!symbol) return;
+    if (btn.classList.contains('is-on')) {
+      // 已加入：導到觀察清單頁，讓使用者能在那裡管理（含移出）。
+      // 不在這裡做「再按一次就移除」——誤觸的代價不對稱：
+      // 誤加只是多一筆，誤刪可能讓他以為股票不見了。
+      SA.navigate('#/watch');
+      return;
+    }
+    if (!SA.watchlist) return;
+
+    var rec = null;
+    for (var i = 0; i < state.records.length; i += 1) {
+      if (state.records[i].symbol === symbol) { rec = state.records[i]; break; }
+    }
+    if (!rec) return;
+
+    btn.disabled = true;
+    btn.textContent = '加入中…';
+
+    SA.watchlist.add(rec).then(function () {
+      btn.classList.add('is-on');
+      btn.setAttribute('aria-pressed', 'true');
+      btn.textContent = '已加入觀察';
+      btn.disabled = false;
+      rec.watched = true;
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = '加入觀察';
+      showError({
+        message: (err && err.message) || '加入觀察失敗',
+        hint: (err && err.hint) || '請稍後重試。',
+      });
+    });
   }
 
   function init() {

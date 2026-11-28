@@ -387,6 +387,11 @@
 
     $('symbolInput').classList.remove('invalid');
     hideSuggestions();
+    /* 推薦依據與行情查詢是兩件獨立的事：前者來自我們自己的帳本，
+       後者要打上游。若等 analyze 成功才載入，一旦上游掛掉（或代碼
+       不存在），使用者連「當初為什麼推薦這檔」都看不到——
+       而那正是他最需要的時候（行情查不到，更想知道當初的依據）。 */
+    loadRecBasis(raw);
     setLoading(true, '正在取得 ' + raw + ' 的行情並計算技術位…');
 
     // 載入文案輪播，避免使用者誤以為卡住
@@ -418,6 +423,8 @@
           if (location.hash !== want) history.replaceState(null, '', '#' + want.slice(1));
         }
         render(data);
+        // 這一檔被推介過就補上「推薦依據」（含標記過的 K 線圖）
+        loadRecBasis(data.meta && data.meta.symbol);
         setStatus('已更新', 'ok');
       })
       .catch(function (err) {
@@ -477,6 +484,131 @@
         [{ label: '重試', onClick: function () { analyze(raw); } }]);
       setStatus('載入失敗', 'err');
     }
+  }
+
+  /* ==================== 推薦依據 ====================
+     只有被推介過的股票才顯示。資料來自帳本（/api/tracker?symbol=…），
+     圖來自 /api/tracker/chart.png——兩者都是只讀，不會改動任何東西。
+
+     為什麼要在意「查不到」與「沒被推介過」的差別：
+       前者是系統出問題（要說出來），後者是正常狀態（靜靜隱藏）。
+       把兩者都當成「沒有」會讓真正的故障永遠沒人發現。 */
+  var recBasisSeq = 0;
+  function loadRecBasis(symbol) {
+    var card = $('recBasisCard');
+    if (!card) return;
+    if (!symbol) { card.hidden = true; return; }
+
+    var seq = ++recBasisSeq;
+    card.hidden = true;
+    $('recBasisInfo').innerHTML = '';
+    $('recBasisLegend').textContent = '';
+    $('recBasisImg').hidden = true;
+
+    api('/api/tracker?preview=1&limit=200')
+      .then(function (res) {
+        // 使用者可能已經換到別檔了，舊回應必須丟掉
+        if (seq !== recBasisSeq) return;
+        var want = String(symbol).toUpperCase();
+        var rec = null;
+        var rows = (res && res.records) || [];
+        for (var i = 0; i < rows.length; i += 1) {
+          if (String(rows[i].symbol || '').toUpperCase() === want) { rec = rows[i]; break; }
+        }
+        if (!rec) { card.hidden = true; return; }
+        renderRecBasis(rec);
+      })
+      .catch(function () {
+        if (seq !== recBasisSeq) return;
+        card.hidden = true;   // 取不到就安靜隱藏，不要干擾主要分析頁
+      });
+  }
+
+  function renderRecBasis(rec) {
+    var card = $('recBasisCard');
+    if (!card) return;
+    card.hidden = false;
+
+    var statusMap = {
+      pending: '等待買入', holding: '持倉中', target_hit: '已止賺', stop_hit: '已止蝕',
+    };
+    var badge = $('recBasisBadge');
+    if (badge) {
+      var bits = [`推介日 ${rec.pickDate || '—'}`];
+      bits.push(statusMap[rec.status] || rec.status || '—');
+      badge.textContent = bits.join('　');
+    }
+
+    // 圖例：與 Telegram 推送用同一套說法，兩邊看到的解釋要一致
+    var legend = ['P 推介 ' + (rec.pickDate || '—')];
+    if (rec.entry && rec.entry.date) legend.push('B 進場 ' + rec.entry.date);
+    if (rec.exit && rec.exit.date) {
+      legend.push('X ' + (rec.status === 'target_hit' ? '止賺' : '止蝕') + ' ' + rec.exit.date);
+    }
+    $('recBasisLegend').textContent = legend.join('　');
+
+    var img = $('recBasisImg');
+    img.hidden = false;
+    img.alt = (rec.symbol || '') + ' K 線圖（含推介與出場標記）';
+    img.src = '/api/tracker/chart.png?symbol=' + encodeURIComponent(rec.symbol) + '&t=' + Date.now();
+    // 上游沒資料時不要留一個破圖圖示
+    img.onerror = function () { img.hidden = true; };
+
+    var html = [];
+    (rec.reasons || []).forEach(function (p) {
+      html.push('<div class="rec-basis-reason">'
+        + (p.title ? '<h4>' + esc(p.title) + '</h4>' : '')
+        + (p.body ? '<p>' + esc(p.body) + '</p>' : '')
+        + '</div>');
+    });
+
+    var p = rec.params || {};
+    var kv = [];
+    function add(k, v, hint) {
+      if (v == null || v === '') return;
+      kv.push('<tr><th>' + esc(k) + '</th><td>' + esc(String(v))
+        + (hint ? '<span class="tr-basis-hint">' + esc(hint) + '</span>' : '') + '</td></tr>');
+    }
+    add('盈虧比', p.rrRatio != null ? fmt(p.rrRatio, 2) : null, '潛在報酬 ÷ 風險');
+    add('距買區（ATR）', p.distAtr != null ? fmt(p.distAtr, 2) : null);
+    add('波動（ATR%）', p.atrPct != null ? fmt(p.atrPct, 2) + '%' : null);
+    add('20 日勝率', p.winRate20 != null ? fmt(p.winRate20, 1) + '%' : null,
+      p.samples ? '樣本 ' + p.samples + ' 次' : null);
+    add('20 日上漲機率', p.probUp20 != null ? fmt(p.probUp20, 1) + '%' : null);
+    add('獲利機率', p.probProfit != null ? fmt(p.probProfit, 1) + '%' : null);
+    if (kv.length) html.push('<table class="tr-basis-params"><tbody>' + kv.join('') + '</tbody></table>');
+
+    var bd = p.breakdown || [];
+    if (bd.length) {
+      html.push('<table class="tr-basis-breakdown"><tbody>' + bd.map(function (d) {
+        var s = d.s == null ? '—' : fmt(d.s, 1);
+        var m = d.m == null ? '' : ' / ' + fmt(d.m, 1);
+        var pct = (d.s != null && d.m) ? Math.max(0, Math.min(100, (d.s / d.m) * 100)) : 0;
+        return '<tr><th>' + esc(d.l || d.k || '') + '</th>'
+          + '<td class="num">' + esc(s + m) + '</td>'
+          + '<td class="tr-basis-bar"><span style="width:' + pct.toFixed(0) + '%"></span></td></tr>';
+      }).join('') + '</tbody></table>');
+    }
+
+    var n = rec.newsAi;
+    if (n && n.summary) {
+      html.push('<div class="tr-basis-news">'
+        + '<div class="tr-basis-news-head">推薦當時新聞 AI 摘要'
+        + (n.newsCount ? '<span class="tr-basis-hint">共 ' + n.newsCount + ' 則</span>' : '')
+        + '</div>'
+        + '<p class="tr-basis-news-sum">' + esc(n.summary) + '</p>'
+        + ((n.headlines || []).length
+          ? '<ul class="tr-basis-news-list">'
+            + n.headlines.slice(0, 5).map(function (h) { return '<li>' + esc(h) + '</li>'; }).join('')
+            + '</ul>'
+          : '')
+        + '</div>');
+    }
+
+    if (!html.length) {
+      html.push('<p class="tr-basis-hint">這一筆沒有存到推薦依據（可能是功能上線前的舊記錄）。</p>');
+    }
+    $('recBasisInfo').innerHTML = html.join('');
   }
 
   /* ==================== 渲染 ==================== */

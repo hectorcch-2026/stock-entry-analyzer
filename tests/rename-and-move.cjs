@@ -313,7 +313,7 @@ t('E3 每個導航都接到真實頁面，且不含已搬移的財報', () => {
   // 路由 → 頁面容器的實際對應（predict 走預設分支，容器是 viewChart）
   const EXPECT = {
     predict: 'viewChart', screen: 'viewScreen', tracker: 'viewTracker',
-    macro: 'viewMacro', rrg: 'viewRrg',
+    macro: 'viewMacro', rrg: 'viewRrg', watch: 'viewWatch',
   };
   const common = read('public/common.js');
 

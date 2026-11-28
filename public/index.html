@@ -45,6 +45,7 @@
       <a href="#/predict" data-route="predict" class="nav-item active">K 線預測</a>
       <a href="#/screen" data-route="screen" class="nav-item">AI 選股</a>
       <a href="#/tracker" data-route="tracker" class="nav-item">推介追蹤</a>
+      <a href="#/watch" data-route="watch" class="nav-item">觀察清單</a>
       <a href="#/macro" data-route="macro" class="nav-item">宏觀與基本面</a>
       <a href="#/rrg" data-route="rrg" class="nav-item">版塊輪動</a>
       <a href="#/predict" data-route="detail" class="nav-item nav-detail" hidden>個股詳情</a>
@@ -203,6 +204,26 @@
         </div>
       </div>
       <p id="fuzzyNote" class="fuzzy-note" hidden></p>
+    </section>
+
+    <!-- ============ 推薦依據（只有被推介過的股票才有） ============
+         為什麼放在報價卡下面而不是某個子分頁裡：
+         它回答的是「當初為什麼推薦這檔、推薦後實際怎麼走」，
+         這是使用者從「推介追蹤」點進來時最想先看到的事。
+         若藏在「基本面」或「新聞」分頁，等於要他自己去找。
+         沒有任何推介記錄時整塊隱藏，不會留下空殼。 -->
+    <section class="card rec-basis-card" id="recBasisCard" aria-label="推薦依據" hidden>
+      <header class="card-head">
+        <h2>推薦依據</h2>
+        <span class="badge" id="recBasisBadge">—</span>
+      </header>
+      <div class="rec-basis-body">
+        <div class="rec-basis-chart">
+          <img class="rec-basis-img" id="recBasisImg" alt="K 線圖（含推介與出場標記）" hidden>
+          <div class="rec-basis-legend" id="recBasisLegend"></div>
+        </div>
+        <div class="rec-basis-info" id="recBasisInfo"></div>
+      </div>
     </section>
 
     <div class="sub-tabs" role="tablist" aria-label="個股分析分頁">
@@ -990,6 +1011,7 @@
               <th class="num">回報率</th>
               <th class="num">持有</th>
               <th class="tr-state">狀態</th>
+              <th class="tr-ops">操作</th>
             </tr>
           </thead>
           <tbody id="trBody"></tbody>
@@ -1052,6 +1074,64 @@
     </section>
 
   </div><!-- /#viewTracker -->
+
+  <!-- ============ 觀察清單 ============
+       為什麼是獨立一頁而不是推介頁的一個分頁：
+         推介頁的資料是「系統的決策」（有損益、有結算），觀察清單是
+         「使用者的意向」（沒有損益、隨時可刪）。兩者的操作語意相反：
+         一邊唯讀、一邊可編輯；混在一頁會讓人誤以為刪除觀察會影響帳本。 -->
+  <div id="viewWatch" hidden>
+
+    <section class="card" aria-label="觀察清單">
+      <header class="card-head">
+        <h2>觀察清單</h2>
+        <span class="badge badge-neutral" id="wtCount">—</span>
+      </header>
+
+      <p class="wt-intro">
+        這裡放你「先盯著、還沒買」的股票。可以在「推介追蹤」頁把任何一筆推介加進來，
+        再從這裡點「個股分析」深入研究。觀察清單與推介帳本是分開的：
+        <strong>刪除觀察不會影響推介記錄與損益統計</strong>。
+      </p>
+
+      <div class="wt-loading" id="wtLoading" hidden>
+        <span class="spinner"></span>
+        <p class="loading-text">正在載入觀察清單…</p>
+      </div>
+
+      <div class="tr-empty" id="wtEmpty" hidden>
+        <p class="te-title">觀察清單還是空的</p>
+        <p class="te-body">
+          到「推介追蹤」頁，在任一筆推介右側按「加入觀察」，
+          那檔股票就會出現在這裡。
+        </p>
+      </div>
+
+      <div class="table-wrap" id="wtTableWrap" hidden>
+        <table class="tr-table wt-table">
+          <thead>
+            <tr>
+              <th class="tr-sym">代碼 / 名稱</th>
+              <th class="tr-date">加入日期</th>
+              <th class="tr-src">來源</th>
+              <th class="tr-ops">操作</th>
+            </tr>
+          </thead>
+          <tbody id="wtBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="wtError" class="error-card" hidden role="alert" aria-live="assertive">
+      <div class="error-head">
+        <span class="error-icon" aria-hidden="true">⚠️</span>
+        <strong>觀察清單載入失敗</strong>
+      </div>
+      <p id="wtErrorMessage" class="error-message"></p>
+      <p id="wtErrorHint" class="error-hint"></p>
+    </section>
+
+  </div><!-- /#viewWatch -->
 
   <!-- ============ 檢視三：宏觀與基本面 ============ -->
   <div id="viewMacro" hidden>
@@ -1531,6 +1611,7 @@
 <script src="/app.js"></script>
 <script src="/screen.js"></script>
 <script src="/tracker.js"></script>
+<script src="/watchlist.js"></script>
 <script src="/macro.js"></script>
 <script src="/macro-charts.js"></script>
 <script src="/rrg-client.js"></script>

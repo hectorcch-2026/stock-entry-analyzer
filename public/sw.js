@@ -51,7 +51,15 @@
 //          macro.js / styles.css。不升版的話舊 shell 會繼續供應沒有
 //          <script src="/macro-charts.js"> 的 index.html，
 //          結果就是區塊永遠停在「載入中…」——而且 console 不會有錯誤。
-const VERSION = 'v1.0.17';
+// v1.0.18：新增觀察清單頁（watchlist.js / #/watch 路由 / 新導覽項），
+//          且推介表格多一欄「操作」。不升版的話舊 shell 會供應
+//          沒有 watchlist.js 的 index.html，於是「觀察清單」導覽點了
+//          只會看到空白區塊——所有腳本都載入了，就是少了那一支。
+// v1.0.19：推介頁的「加入觀察」按鈕改為會隨觀察清單變動而同步
+//          （監聽 watchlist:changed）。這修的是「在觀察清單移出後，
+//          回推介頁按鈕仍寫著已加入」——只改 tracker.js / watchlist.js，
+//          但舊 shell 會供應舊的兩支，於是看起來像修好了其實沒有。
+const VERSION = 'v1.0.19';
 const SHELL_CACHE = `shell-${VERSION}`;
 const ASSET_CACHE = `assets-${VERSION}`;
 const DATA_CACHE = `data-${VERSION}`;
@@ -68,6 +76,7 @@ const SHELL_ASSETS = [
   '/common.js',
   '/screen.js',
   '/tracker.js',
+  '/watchlist.js',
   '/macro.js',
   '/macro-charts.js',
   '/rrg-client.js',
